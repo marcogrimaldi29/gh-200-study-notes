@@ -1,0 +1,489 @@
+---
+import { PAGES } from '../data/site';
+import { href } from '../lib/urls';
+import Octicon from './Octicon.astro';
+import StatusIcon from './StatusIcon.astro';
+
+/**
+ * Site-wide search, styled after GitHub's command palette.
+ *
+ * The index is built in the browser from the site's own rendered pages, section
+ * by section, the first time search is opened. Every term on every page is
+ * searchable — prose, tables, callouts, captions, code samples, log panels and
+ * the quoted labels inside Mermaid diagrams — without a separate index to
+ * generate, commit and keep in step with the content. It also behaves
+ * identically in `npm run dev` and in production, which a build-time index
+ * would not.
+ *
+ * Workflow syntax is searched as written: queries split on whitespace only, so
+ * `workflow_dispatch`, `GITHUB_OUTPUT`, `id-token`, `runs-on` and
+ * `::add-mask::` stay whole. Each section keeps its prose and its samples
+ * apart, so a section that explains a key outranks one where the key only
+ * appears inside a code block.
+ *
+ * Results are section-level, so choosing one lands on the exact heading rather
+ * than the top of a long page.
+ */
+
+const seed = PAGES.map((p) => ({
+  url: href(p.slug),
+  label: p.label,
+  accent: p.accent,
+}));
+---
+
+<button type="button" class="icon-btn search-btn" id="search-open" aria-label="Search the study notes" title="Search (Ctrl+K)">
+  <Octicon name="search" />
+</button>
+
+<dialog class="search-modal" id="search-modal" aria-label="Search the study notes">
+  <div class="sm-inner">
+    <div class="sm-field">
+      <Octicon name="search" size={16} class="sm-icon" />
+      <input
+        type="search"
+        id="search-input"
+        class="sm-input"
+        placeholder="Search every page — workflow_dispatch, GITHUB_OUTPUT, runner groups…"
+        autocomplete="off"
+        spellcheck="false"
+        role="combobox"
+        aria-expanded="false"
+        aria-controls="search-results"
+        aria-autocomplete="list"
+      />
+      <button type="button" class="sm-close" id="search-close" aria-label="Close search">Esc</button>
+    </div>
+
+    <div class="sm-status-row">
+      {/* The amber in-progress ring, shown while the index builds on first use. */}
+      <StatusIcon status="in-progress" size={12} label="" class="sm-ring" />
+      <p class="sm-status" id="search-status" role="status" aria-live="polite"></p>
+    </div>
+
+    <ul class="sm-results" id="search-results" role="listbox" aria-label="Search results"></ul>
+
+    <div class="sm-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> open</span>
+      <span><kbd>Esc</kbd> close</span>
+    </div>
+  </div>
+</dialog>
+
+<script type="application/json" id="search-pages" set:html={JSON.stringify(seed)} />
+
+<script>
+  interface Page {
+    url: string;
+    label: string;
+    accent: string;
+  }
+  interface Rec {
+    url: string;
+    label: string;
+    accent: string;
+    heading: string;
+    hash: string;
+    /** Explanatory text: prose, lists, tables, callouts, captions, diagram labels. */
+    prose: string;
+    /** Samples: code blocks and log panels. */
+    code: string;
+    /** Inline code inside the prose: how a section names the key it explains. */
+    inlineLc: string;
+    proseLc: string;
+    codeLc: string;
+    headingLc: string;
+    labelLc: string;
+  }
+
+  const openBtn = document.getElementById('search-open') as HTMLButtonElement | null;
+  const modal = document.getElementById('search-modal') as HTMLDialogElement | null;
+  const input = document.getElementById('search-input') as HTMLInputElement | null;
+  const closeBtn = document.getElementById('search-close');
+  const list = document.getElementById('search-results') as HTMLUListElement | null;
+  const status = document.getElementById('search-status');
+  const seedEl = document.getElementById('search-pages');
+
+  if (openBtn && modal && input && list && status && seedEl) {
+    const pages: Page[] = JSON.parse(seedEl.textContent || '[]');
+
+    let records: Rec[] | null = null;
+    let building: Promise<Rec[]> | null = null;
+    let active = -1;
+
+    const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
+    const setBuilding = (on: boolean) => modal.classList.toggle('is-building', on);
+
+    /* ---------- index ---------- */
+
+    // Split one top-level block into its prose and its samples.
+    function split(node: Element): { prose: string; code: string; inline: string } {
+      const clone = node.cloneNode(true) as Element;
+      let code = '';
+      const inline = Array.from(clone.querySelectorAll('code'))
+        .filter((c) => !c.closest('pre'))
+        .map((c) => c.textContent || '')
+        .join(' ');
+      const samples = clone.matches('.code-block, .log-panel')
+        ? [clone]
+        : Array.from(clone.querySelectorAll('.code-block, .log-panel'));
+      samples.forEach((s) => {
+        s.querySelectorAll('.file-copy, .copy-status').forEach((x) => x.remove());
+        // A file block's path is a caption, not code: keep it with the prose.
+        const path = s.querySelector('.file-path')?.textContent ?? '';
+        const title = s.querySelector('.log-title')?.textContent ?? '';
+        const body = s.querySelector('pre, .log-body')?.textContent ?? s.textContent ?? '';
+        code += ' ' + body;
+        if (s === clone) return;
+        s.replaceWith(document.createTextNode(` ${path} ${title} `));
+      });
+      if (samples[0] === clone) {
+        const path = clone.querySelector('.file-path')?.textContent ?? '';
+        const title = clone.querySelector('.log-title')?.textContent ?? '';
+        return { prose: `${path} ${title}`, code, inline: '' };
+      }
+      return { prose: clone.textContent || '', code, inline };
+    }
+
+    function extract(doc: Document, page: Page): Rec[] {
+      const out: Rec[] = [];
+      // Some terminology lives only in a diagram, so diagrams have to be
+      // indexed. Keep the quoted labels (nodes, edges, subgraph titles) and
+      // drop the graph syntax around them, which would otherwise match on
+      // "flowchart" and arrow tokens.
+      doc.querySelectorAll('pre.mermaid').forEach((node) => {
+        const labels = (node.textContent || '').match(/"([^"]+)"/g) || [];
+        node.textContent = labels.join(' ').replace(/<br\s*\/?>/g, ' ').replace(/"/g, ' ');
+      });
+
+      const root = doc.querySelector('.content');
+      if (!root) return out;
+
+      const push = (heading: string, hash: string, prose: string, code: string, inline: string) => {
+        const p = clean(prose);
+        const c = clean(code);
+        if (!p && !c && !heading) return;
+        out.push({
+          url: page.url,
+          label: page.label,
+          accent: page.accent,
+          heading: heading || page.label,
+          hash,
+          prose: p,
+          code: c,
+          proseLc: p.toLowerCase(),
+          codeLc: c.toLowerCase(),
+          inlineLc: inline.toLowerCase(),
+          headingLc: (heading || page.label).toLowerCase(),
+          labelLc: page.label.toLowerCase(),
+        });
+      };
+
+      // Everything above the first heading belongs to an intro record.
+      const intro = doc.querySelector('.page-head .lead, .hero .lead');
+      let heading = page.label;
+      let hash = '';
+      let prose = intro ? intro.textContent || '' : '';
+      let code = '';
+      let inline = '';
+
+      for (const node of Array.from(root.children)) {
+        const tag = node.tagName;
+        if (tag === 'H2' || tag === 'H3') {
+          push(heading, hash, prose, code, inline);
+          heading = clean(node.textContent || '');
+          hash = node.id ? '#' + node.id : '';
+          prose = '';
+          code = '';
+          inline = '';
+        } else {
+          const parts = split(node);
+          prose += ' ' + parts.prose;
+          code += ' ' + parts.code;
+          inline += ' ' + parts.inline;
+        }
+      }
+      push(heading, hash, prose, code, inline);
+      return out;
+    }
+
+    function buildIndex(): Promise<Rec[]> {
+      if (records) return Promise.resolve(records);
+      if (building) return building;
+
+      building = Promise.all(
+        pages.map((page) =>
+          fetch(page.url)
+            .then((r) => (r.ok ? r.text() : ''))
+            .then((html) => (html ? extract(new DOMParser().parseFromString(html, 'text/html'), page) : []))
+            .catch(() => [] as Rec[]),
+        ),
+      ).then((groups) => {
+        records = groups.flat();
+        return records;
+      });
+
+      return building;
+    }
+
+    // Warm the index as soon as there is any sign of intent, so the first
+    // keystroke has something to search.
+    openBtn.addEventListener('pointerenter', () => void buildIndex(), { once: true });
+    openBtn.addEventListener('focus', () => void buildIndex(), { once: true });
+
+    /* ---------- matching and scoring ---------- */
+
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // A term as typed, then without surrounding quotes, backticks or a trailing
+    // colon — so `runs-on:` still finds prose that writes `runs-on`. Workflow
+    // commands keep their colons because the typed form is tried first.
+    function variants(term: string): string[] {
+      const v = [term, term.replace(/^[`'"(]+|[`'"),.;]+$/g, ''), term.replace(/^[`'"(]+|[`'"),.;:]+$/g, '')];
+      return [...new Set(v.filter(Boolean))];
+    }
+
+    const wholeWord = (hay: string, term: string) =>
+      new RegExp('(?<![a-z0-9_])' + escape(term) + '(?![a-z0-9_])').test(hay);
+
+    interface Hit {
+      rec: Rec;
+      score: number;
+      matched: string[];
+      inProse: boolean;
+    }
+
+    // Score one form of one term against a record; 0 when it does not occur.
+    function termScore(rec: Rec, term: string): { s: number; prose: boolean } {
+      let s = 0;
+      let prose = false;
+      if (rec.headingLc.includes(term)) s += wholeWord(rec.headingLc, term) ? 14 : 9;
+      if (rec.labelLc.includes(term)) s += 2;
+      if (rec.proseLc.includes(term)) {
+        // Explained here: a prose mention far outweighs a sample-only one.
+        prose = true;
+        s += wholeWord(rec.proseLc, term) ? 5 : 3;
+        s += Math.min(rec.proseLc.split(term).length - 2, 3);
+        // Named as code in the prose: this section is about the key.
+        if (rec.inlineLc.includes(term)) s += 4;
+      } else if (rec.codeLc.includes(term)) {
+        s += 1;
+      }
+      const found = rec.headingLc.includes(term) || rec.proseLc.includes(term) || rec.codeLc.includes(term);
+      return { s: found ? Math.max(s, 1) : 0, prose };
+    }
+
+    function score(rec: Rec, terms: string[][], phrase: string): Hit | null {
+      let s = 0;
+      let inProse = false;
+      const matched: string[] = [];
+
+      // Every term must appear somewhere, so multi-word queries narrow rather
+      // than widen the result set. Each term takes its best-scoring form, so
+      // `runs-on:` still credits prose that writes `runs-on`.
+      for (const forms of terms) {
+        let best = { s: 0, prose: false, form: '' };
+        for (const f of forms) {
+          const r = termScore(rec, f);
+          if (r.s > best.s) best = { ...r, form: f };
+        }
+        if (!best.s) return null;
+        matched.push(best.form);
+        s += best.s;
+        inProse ||= best.prose;
+      }
+
+      // An exact phrase is a much stronger signal than the same words scattered.
+      if (terms.length > 1) {
+        if (rec.headingLc.includes(phrase)) s += 25;
+        else if (rec.proseLc.includes(phrase)) s += 8;
+      }
+      // Prefer the tighter section when two cover the same ground.
+      if (rec.prose.length < 900) s += 1;
+      return { rec, score: s, matched, inProse };
+    }
+
+    /* ---------- rendering ---------- */
+
+    function highlight(text: string, terms: string[]): DocumentFragment {
+      const frag = document.createDocumentFragment();
+      const lower = text.toLowerCase();
+      const ranges: [number, number][] = [];
+
+      for (const term of terms) {
+        let i = lower.indexOf(term);
+        while (i !== -1) {
+          ranges.push([i, i + term.length]);
+          i = lower.indexOf(term, i + term.length);
+        }
+      }
+      ranges.sort((a, b) => a[0] - b[0]);
+
+      let cursor = 0;
+      for (const [start, end] of ranges) {
+        if (start < cursor) continue;
+        frag.append(text.slice(cursor, start));
+        const mark = document.createElement('mark');
+        mark.textContent = text.slice(start, end);
+        frag.append(mark);
+        cursor = end;
+      }
+      frag.append(text.slice(cursor));
+      return frag;
+    }
+
+    function snippet(text: string, terms: string[]): string {
+      const lower = text.toLowerCase();
+      let at = -1;
+      for (const term of terms) {
+        const i = lower.indexOf(term);
+        if (i !== -1 && (at === -1 || i < at)) at = i;
+      }
+      if (at === -1) return text.slice(0, 160) + (text.length > 160 ? '…' : '');
+      const start = Math.max(0, at - 70);
+      const end = Math.min(text.length, at + 130);
+      return (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+    }
+
+    function setActive(next: number) {
+      const items = Array.from(list!.querySelectorAll<HTMLLIElement>('.sm-hit'));
+      if (!items.length) return;
+      active = (next + items.length) % items.length;
+      items.forEach((li, i) => {
+        const on = i === active;
+        li.classList.toggle('active', on);
+        li.setAttribute('aria-selected', String(on));
+        if (on) {
+          li.scrollIntoView({ block: 'nearest' });
+          input!.setAttribute('aria-activedescendant', li.id);
+        }
+      });
+    }
+
+    function render(query: string) {
+      const raw = query.toLowerCase().split(/\s+/).filter(Boolean);
+      const terms = raw.map(variants);
+      list!.innerHTML = '';
+      active = -1;
+      input!.removeAttribute('aria-activedescendant');
+
+      if (!raw.length) {
+        status!.textContent = records ? 'Type to search every page.' : 'Building the index…';
+        input!.setAttribute('aria-expanded', 'false');
+        return;
+      }
+      if (!records) {
+        status!.textContent = 'Building the index…';
+        return;
+      }
+
+      const phrase = raw.join(' ');
+      const hits = records
+        .map((rec) => score(rec, terms, phrase))
+        .filter((h): h is Hit => h !== null && h.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 30);
+
+      input!.setAttribute('aria-expanded', String(hits.length > 0));
+      status!.textContent = hits.length
+        ? `${hits.length} result${hits.length === 1 ? '' : 's'}`
+        : `No match for “${query}”.`;
+
+      hits.forEach(({ rec, matched, inProse }, i) => {
+        const li = document.createElement('li');
+        li.className = 'sm-hit';
+        li.id = `sm-hit-${i}`;
+        li.setAttribute('role', 'option');
+        li.setAttribute('aria-selected', 'false');
+        li.style.setProperty('--accent', rec.accent);
+
+        const a = document.createElement('a');
+        a.href = rec.url + rec.hash;
+
+        const crumb = document.createElement('span');
+        crumb.className = 'sm-crumb';
+        crumb.textContent = rec.label;
+
+        const title = document.createElement('span');
+        title.className = 'sm-title';
+        title.append(highlight(rec.heading, matched));
+
+        const body = document.createElement('span');
+        body.className = inProse ? 'sm-snippet' : 'sm-snippet sm-snippet-code';
+        body.append(highlight(snippet(inProse || !rec.code ? rec.prose : rec.code, matched), matched));
+
+        a.append(crumb, title, body);
+        li.append(a);
+        list!.append(li);
+      });
+
+      if (hits.length) setActive(0);
+    }
+
+    /* ---------- open / close ---------- */
+
+    async function open() {
+      modal!.showModal();
+      input!.value = '';
+      input!.focus();
+      if (!records) setBuilding(true);
+      render('');
+      await buildIndex();
+      setBuilding(false);
+      if (modal!.open) render(input!.value.trim());
+    }
+
+    function close() {
+      modal!.close();
+    }
+
+    openBtn.addEventListener('click', () => void open());
+    closeBtn?.addEventListener('click', close);
+
+    // Click outside the panel closes it; <dialog> handles Esc itself.
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) close();
+    });
+
+    let debounce: number | undefined;
+    input.addEventListener('input', () => {
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => render(input.value.trim()), 90);
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive(active + 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive(active - 1);
+      } else if (e.key === 'Enter') {
+        const link = list!.querySelector<HTMLAnchorElement>('.sm-hit.active a');
+        if (link) {
+          e.preventDefault();
+          close();
+          window.location.href = link.href;
+        }
+      }
+    });
+
+    list.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('a')) close();
+    });
+
+    // Ctrl/Cmd+K from anywhere, and "/" when not already typing.
+    document.addEventListener('keydown', (e) => {
+      const el = e.target as HTMLElement;
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(el?.tagName || '') || el?.isContentEditable;
+      if ((e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        modal.open ? close() : void open();
+      } else if (e.key === '/' && !typing && !modal.open) {
+        e.preventDefault();
+        void open();
+      }
+    });
+  }
+</script>

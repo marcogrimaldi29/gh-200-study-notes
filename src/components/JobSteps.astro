@@ -1,0 +1,27 @@
+---
+import StatusIcon from './StatusIcon.astro';
+
+/**
+ * A genuine procedure — something a candidate must do in order — drawn as the
+ * expanded job view of an Actions run: a job header, then one row per step with
+ * a success icon and the step name, its detail folded beneath (native
+ * <details>, see Step.astro). Explanations stay prose; this is for real
+ * sequences only.
+ */
+interface Props {
+  /** The job name in the header, e.g. "Register a self-hosted runner". */
+  job: string;
+}
+
+const { job } = Astro.props;
+---
+
+<section class="job-steps" aria-label={job}>
+  <header class="js-head">
+    <StatusIcon status="success" />
+    <span class="js-job">{job}</span>
+  </header>
+  <ol class="js-list">
+    <slot />
+  </ol>
+</section>

@@ -1,0 +1,161 @@
+---
+/**
+ * A Mermaid diagram in a captioned figure.
+ *
+ * The graph source is rendered as text inside the figure. Mermaid replaces it
+ * with an SVG on load; if the script fails or JavaScript is off, the reader
+ * still sees the (readable) diagram definition rather than an empty box.
+ *
+ * `variant="run"` draws a job-dependency diagram like the graph on an Actions
+ * run summary: jobs as bordered 6px cards on the surface colour, grey
+ * connectors. Every flowchart can use the shared status classes —
+ * `:::success`, `:::failure`, `:::skipped` (dashed) and `:::pending` — which
+ * colour a job's border, never its fill, so a diagram can show what ran, what
+ * failed and what was skipped without a legend.
+ *
+ * Mermaid is a dependency of this project rather than a CDN script, so the
+ * version is pinned and the site has no third-party runtime requests.
+ */
+interface Props {
+  /** Mermaid graph definition. */
+  code: string;
+  /** Caption shown under the diagram. */
+  caption?: string;
+  /** "run" styles the diagram as an Actions run graph. */
+  variant?: 'default' | 'run';
+}
+
+const { code, caption, variant = 'default' } = Astro.props;
+---
+
+<figure class:list={['figure', variant === 'run' && 'figure-run']}>
+  <pre class="mermaid" data-variant={variant}>{code.trim()}</pre>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<script>
+  import { EVT_DIAGRAMS, EVT_THEME } from '../lib/keys';
+
+  const nodes = Array.from(document.querySelectorAll<HTMLElement>('pre.mermaid'));
+
+  // Mermaid is a large dependency, so it is imported dynamically: pages with no
+  // diagram never download it, and pages that do have one render their text
+  // first and upgrade to SVG afterwards. It is listed in optimizeDeps.include
+  // (astro.config.mjs) because Vite's startup scan cannot see this import.
+  if (nodes.length) {
+    const { default: mermaid } = await import('mermaid');
+
+    // Keep the original source so the diagram can be re-rendered when the
+    // theme flips (Mermaid bakes colours into the generated SVG).
+    nodes.forEach((n) => {
+      if (!n.dataset.src) n.dataset.src = n.textContent ?? '';
+    });
+
+    const read = (name: string, fallback: string) => {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    };
+
+    // The run-status classes, appended to every flowchart at render time (so
+    // they stay out of the source that search indexes). Border only.
+    function statusClasses() {
+      const green = read('--accent-green', '#1a7f37');
+      const red = read('--accent-red', '#cf222e');
+      const grey = read('--text-muted', '#6e7781');
+      const amber = read('--accent-orange', '#9a6700');
+      return [
+        `classDef success stroke:${green},stroke-width:2px`,
+        `classDef failure stroke:${red},stroke-width:2px`,
+        `classDef skipped stroke:${grey},stroke-width:1.5px,stroke-dasharray:5 4`,
+        `classDef pending stroke:${amber},stroke-width:2px`,
+      ].join('\n');
+    }
+
+    function config(run: boolean) {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const nodeBg = run ? read('--surface', '#f6f8fa') : read('--surface-2', '#eff2f5');
+      const nodeBorder = run ? read('--border', '#d0d7de') : read('--accent-blue', '#0969da');
+      const line = run ? read('--text-muted', '#6e7781') : read('--text-soft', '#59636e');
+      return {
+        startOnLoad: false,
+        securityLevel: 'strict' as const,
+        theme: 'base' as const,
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif',
+        flowchart: { curve: run ? ('linear' as const) : ('basis' as const), useMaxWidth: true, htmlLabels: true },
+        sequence: { useMaxWidth: true },
+        // Themed from the same Primer tokens as the page, so diagrams follow the
+        // switcher. Default diagrams: nodes on the tertiary surface with an
+        // accent-blue border. Run graphs: jobs on the surface with a grey border
+        // and grey connectors, as on an Actions run summary.
+        themeVariables: {
+          darkMode: dark,
+          background: read('--surface', '#f6f8fa'),
+          primaryColor: nodeBg,
+          primaryTextColor: read('--text', '#1f2328'),
+          primaryBorderColor: nodeBorder,
+          secondaryColor: read('--surface-3', '#e6eaef'),
+          tertiaryColor: read('--bg', '#ffffff'),
+          lineColor: line,
+          textColor: read('--text-soft', '#59636e'),
+          mainBkg: nodeBg,
+          nodeBorder,
+          clusterBkg: read('--bg', '#ffffff'),
+          clusterBorder: read('--border', '#d0d7de'),
+          titleColor: read('--text', '#1f2328'),
+          edgeLabelBackground: read('--surface', '#f6f8fa'),
+          // Sequence diagrams.
+          actorBkg: read('--surface-2', '#eff2f5'),
+          actorBorder: read('--accent-blue', '#0969da'),
+          actorTextColor: read('--text', '#1f2328'),
+          signalColor: read('--text-soft', '#59636e'),
+          signalTextColor: read('--text', '#1f2328'),
+          noteBkgColor: read('--surface-3', '#e6eaef'),
+          noteBorderColor: read('--border', '#d0d7de'),
+          noteTextColor: read('--text', '#1f2328'),
+        },
+      };
+    }
+
+    async function render() {
+      const classes = statusClasses();
+
+      // Reset every node to its source before re-running.
+      nodes.forEach((n) => {
+        n.removeAttribute('data-processed');
+        const src = n.dataset.src ?? '';
+        n.textContent = /^\s*(flowchart|graph)\b/.test(src) ? `${src}\n${classes}` : src;
+      });
+
+      // Two passes, because Mermaid's configuration is global: ordinary
+      // diagrams first, then run graphs with their own theme.
+      for (const run of [false, true]) {
+        const batch = nodes.filter((n) => (n.dataset.variant === 'run') === run);
+        if (!batch.length) continue;
+        mermaid.initialize(config(run));
+        try {
+          await mermaid.run({ nodes: batch });
+        } catch (err) {
+          console.warn('Mermaid render failed', err);
+        }
+      }
+
+      // Wide diagrams would otherwise shrink to fit a phone until the labels are
+      // unreadable. Give each a floor of 560px (or its natural width, if smaller)
+      // so a narrow figure scrolls sideways instead of scaling the text away.
+      nodes.forEach((n) => {
+        const svg = n.querySelector('svg');
+        const natural = svg?.viewBox?.baseVal?.width;
+        if (svg && natural) svg.style.minWidth = `${Math.min(natural, 560)}px`;
+      });
+
+      // Rendering changes the page height substantially, which invalidates any
+      // anchor scroll the browser already performed.
+      window.dispatchEvent(new CustomEvent(EVT_DIAGRAMS));
+    }
+
+    render();
+    window.addEventListener(EVT_THEME, () => {
+      render();
+    });
+  }
+</script>

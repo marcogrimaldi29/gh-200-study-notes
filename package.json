@@ -1,0 +1,22 @@
+{
+  "name": "gh-200-study-notes",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Study notes for Exam GH-200: GitHub Actions (GitHub Actions certification).",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@primer/octicons": "^19.42.0",
+    "astro": "^7.4.5",
+    "mermaid": "^12.3.0"
+  }
+}

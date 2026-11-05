@@ -1,0 +1,438 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import JobSteps from '../../components/JobSteps.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Step from '../../components/Step.astro';
+import { SITE } from '../../data/site';
+import { href } from '../../lib/urls';
+
+const policyLayers = `
+flowchart TB
+  subgraph ENT["Enterprise"]
+    direction TB
+    E1["Actions policies<br/>allowed actions, SHA pinning, retention,<br/>fork PRs, runner groups"]
+    subgraph ORG["Organization"]
+      direction TB
+      O1["Same policies,<br/>only as strict or stricter"]
+      subgraph REPO["Repository"]
+        direction TB
+        R1["Settings → Actions → General<br/>within what the org allows"]
+      end
+    end
+  end
+  E1 ~~~ O1
+  O1 ~~~ R1
+`;
+
+const platformRepo = `octo-org/platform/                      # owned by the platform team
+├── .github/
+│   ├── CODEOWNERS                       # /.github/workflows/ @octo-org/platform
+│   └── workflows/
+│       ├── node-ci.yml                  # reusable: on: workflow_call
+│       ├── container-build.yml          # reusable
+│       └── deploy.yml                   # reusable, uses environments
+└── actions/
+    ├── setup-toolchain/action.yml       # composite
+    └── notify/action.yml                # JavaScript
+
+octo-org/.github/                        # organisation-wide defaults
+└── workflow-templates/
+    ├── node-service.yml                 # calls platform/node-ci.yml@v3
+    └── node-service.properties.json`;
+
+const policyApi = `# Organisation: allow Actions everywhere, but only selected actions, pinned to SHAs
+gh api -X PUT orgs/octo-org/actions/permissions \\
+  -f enabled_repositories=all -f allowed_actions=selected -F sha_pinning_required=true
+
+gh api -X PUT orgs/octo-org/actions/permissions/selected-actions --input - <<'EOF'
+{
+  "github_owned_allowed": true,
+  "verified_allowed": true,
+  "patterns_allowed": [
+    "docker/*",
+    "azure/login@*",
+    "octo-org/*",
+    "!some-vendor/risky-action@*"
+  ]
+}
+EOF
+
+# Default GITHUB_TOKEN permissions for new workflows: read-only, and no PR approvals
+gh api -X PUT orgs/octo-org/actions/permissions/workflow \\
+  -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false`;
+
+const setupJobLog = `::group::Runner Image
+Image: ubuntu-24.04
+Version: 20261027.1
+Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261027.1/images/ubuntu/Ubuntu2404-Readme.md
+Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261027.1
+::endgroup::
+::group::Runner Image Provisioner
+Hosted Compute Agent
+::endgroup::
+::group::GITHUB_TOKEN Permissions
+Contents: read
+Metadata: read
+::endgroup::
+Secret source: Actions
+Prepare workflow directory
+Prepare all required actions
+Getting action download info
+Download action repository 'actions/checkout@v7' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+Complete job name: build`;
+
+const installAtRuntime = `steps:
+  - uses: actions/setup-python@v7            # a version from the toolcache, or downloaded
+    with:
+      python-version: '3.14'
+      cache: pip
+  - uses: actions/setup-java@v6
+    with:
+      distribution: temurin
+      java-version: '25'
+  - name: System packages
+    run: sudo apt-get update && sudo apt-get install -y --no-install-recommends graphviz
+  - name: Which versions are on this image?
+    run: |
+      echo "Image: $ImageOS $ImageVersion"
+      ls "$RUNNER_TOOL_CACHE"`;
+
+const registerScript = `# Linux or macOS, in the folder where the runner package was extracted
+./config.sh --url https://github.com/octo-org \\
+  --token "$REGISTRATION_TOKEN" \\
+  --name build-linux-01 \\
+  --runnergroup production \\
+  --labels linux-x64,docker,gpu \\
+  --ephemeral                           # take one job, then de-register
+
+sudo ./svc.sh install && sudo ./svc.sh start   # run as a service`;
+
+const runsOnSelf = `jobs:
+  build:
+    runs-on: [self-hosted, linux, x64, gpu]   # every label must match one runner
+
+  deploy:
+    runs-on:
+      group: production                       # a runner group…
+      labels: [linux-x64]                     # …narrowed by labels
+
+  scale:
+    runs-on: arc-runner-set                   # an Actions Runner Controller scale set`;
+
+const runnerTrouble = `
+flowchart TD
+  Q["Job stuck: waiting for a runner"] --> A{"Any online runner with<br/>every requested label?"}
+  A -->|"no"| A1["Fix labels, or bring a runner online"]
+  A -->|"yes"| B{"Is its group available<br/>to this repository?"}
+  B -->|"no"| B1["Grant the repo or org access;<br/>allow public repos if needed"]
+  B -->|"yes"| C{"Is the group limited to<br/>selected workflows?"}
+  C -->|"yes, not this one"| C1["Add the workflow file and ref"]
+  C -->|"no"| D["Check the runner's _diag logs,<br/>version and network access"]
+`;
+
+const secretsApi = `# GitHub CLI: encrypts the value with the right public key for you
+gh secret set NPM_TOKEN --body "$NPM_TOKEN"                       # repository
+gh secret set DEPLOY_KEY --env production < deploy_key.pem        # environment
+gh secret set SONAR_TOKEN --org octo-org --visibility selected --repos web,api
+gh variable set API_URL --env staging --body https://staging.api.example.com
+gh secret list --org octo-org`;
+
+const secretsRest = `# 1 · Fetch the public key the value must be encrypted with
+GET /repos/{owner}/{repo}/actions/secrets/public-key
+#   → { "key_id": "568250167242549743", "key": "base64 public key" }
+
+# 2 · Encrypt the value with a libsodium sealed box, then create or update it
+PUT /repos/{owner}/{repo}/actions/secrets/{secret_name}
+#   { "encrypted_value": "base64 ciphertext", "key_id": "568250167242549743" }
+
+# Organisation secrets also take a visibility: all, private or selected
+PUT /orgs/{org}/actions/secrets/{secret_name}
+#   { "encrypted_value": "…", "key_id": "…", "visibility": "selected",
+#     "selected_repository_ids": [1296269, 1296280] }
+
+# Environment secrets live under the environment
+PUT /repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}
+
+# Variables are plain text: no encryption step
+POST  /repos/{owner}/{repo}/actions/variables              { "name": "API_URL", "value": "…" }
+PATCH /repos/{owner}/{repo}/actions/variables/{name}       { "value": "…" }`;
+
+const useSecrets = `jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production                   # environment secrets and variables
+    steps:
+      - uses: actions/checkout@v7
+      - name: Deploy
+        env:
+          DEPLOY_KEY: \${{ secrets.DEPLOY_KEY }}  # environment beats repo beats org
+          API_URL: \${{ vars.API_URL }}
+          REGION: \${{ vars.REGION || 'eu-west' }} # variables can have fallbacks
+        run: ./deploy.sh --url "$API_URL" --region "$REGION"
+
+  call-shared:
+    uses: octo-org/platform/.github/workflows/deploy.yml@v3
+    secrets: inherit                          # every secret this workflow can see`;
+---
+
+<NoteLayout
+  slug="skill-4-enterprise"
+  description="GH-200 Skill 4, Manage GitHub Actions for the enterprise: reusable components and templates, access to private actions and workflows, enterprise and organisation policies, GitHub-hosted, larger and self-hosted runners, runner groups, IP allow lists and networking, preinstalled software and the toolcache, and secrets and variables at every scope including the REST API."
+  intro="Running Actions for many teams at once. Sharing reusable building blocks and controlling who may use what, setting policy at enterprise and organisation level, running and monitoring fleets of GitHub-hosted and self-hosted runners, and managing secrets and variables at the right scope — by hand and through the API."
+>
+  <!-- ================================================================= -->
+  <h2 id="distribute-and-govern">Distribute and govern actions and workflows</h2>
+
+  <h3 id="reusable-components-and-templates">Define and manage reusable components and templates</h3>
+  <p>
+    At scale, standard automation is a small set of <strong>owned, versioned</strong> building blocks: reusable workflows
+    for whole pipelines, composite or JavaScript actions for shared steps, and workflow templates that point new
+    repositories at them.
+  </p>
+  <CodeBlock lang="text" label="a typical layout" code={platformRepo} />
+  <ul>
+    <li>Keep reusable workflows and actions in a repository owned by a platform team, protected by <strong>CODEOWNERS</strong> and rulesets, and released with tags like any other code.</li>
+    <li>Callers pin a major (<code>@v3</code>) or a SHA; the platform team ships fixes by moving the tag and breaking changes as a new major.</li>
+    <li>Templates in <code>.github/workflow-templates/</code> give every new repository a starting workflow that calls the central one.</li>
+    <li>To make a workflow <strong>mandatory</strong>, use a repository <strong>ruleset</strong> at organisation level with <strong>Require workflows to pass before merging</strong> — the successor of "required workflows". It runs the chosen workflow on pull requests to targeted repositories and blocks merging until it passes.</li>
+  </ul>
+
+  <h3 id="control-access-to-actions-and-workflows">Control access to actions and workflows</h3>
+  <p>
+    A private or internal repository's actions and reusable workflows are invisible to other repositories until that
+    repository opts in under <strong>Settings → Actions → General → Access</strong>:
+  </p>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Access level</th><th>Who can use its actions and reusable workflows</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Not accessible</strong> (default)</td><td>Only workflows in the same repository</td></tr>
+        <tr><td><strong>Accessible from repositories owned by the user</strong></td><td>The owner's other private repositories (personal accounts)</td></tr>
+        <tr><td><strong>Accessible from repositories in the organisation</strong></td><td>Private and internal repositories in the same organisation</td></tr>
+        <tr><td><strong>Accessible from repositories in the enterprise</strong></td><td>Private and internal repositories in every organisation of the enterprise (internal repositories)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    That grants the right to <em>run</em> the code, not to read the repository. The organisation's allowed-actions policy
+    still applies on top — an action can be shared and still be blocked.
+  </p>
+
+  <h3 id="organizational-use-policies">Configure organisational use policies</h3>
+  <Mermaid
+    code={policyLayers}
+    caption="Actions policy cascades down. Each level can only keep or tighten what the level above allows: a repository cannot re-enable an action its organisation blocks, or raise a retention period above the organisation's."
+  />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Policy</th><th>Options</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Which repositories may use Actions</strong></td><td>All, selected repositories, or none (disables Actions)</td></tr>
+        <tr><td><strong>Allowed actions and reusable workflows</strong></td><td>Allow all · allow only the enterprise's or organisation's own · allow those plus selected others: <em>actions created by GitHub</em>, <em>Marketplace actions by verified creators</em>, and <em>specified patterns</em> (<code>owner/*</code>, <code>owner/repo@ref</code>, and <code>!pattern</code> to block)</td></tr>
+        <tr><td><strong>Require actions to be pinned to a full-length commit SHA</strong></td><td>A checkbox under the allowed-actions choice (since August 2025): any tag- or branch-pinned action fails the workflow</td></tr>
+        <tr><td><strong>Fork pull request workflows</strong></td><td>Require approval for first-time contributors new to GitHub, for all first-time contributors, or for all outside collaborators; for private repositories, whether fork PRs run at all, get a write token or receive secrets</td></tr>
+        <tr><td><strong>Workflow permissions</strong></td><td>Default <code>GITHUB_TOKEN</code>: read repository contents and packages (the default for new organisations) or read and write; and whether Actions may <strong>create and approve pull requests</strong></td></tr>
+        <tr><td><strong>Artifact and log retention</strong></td><td>Maximum days; repositories may only shorten it</td></tr>
+        <tr><td><strong>Runners</strong></td><td>Which repositories may use self-hosted runners; runner groups and their access; cache storage limits</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <CodeBlock lang="bash" label="gh api" code={policyApi} />
+  <Callout type="exam" title="The blocklist is evaluated last">
+    <p>
+      In <code>patterns_allowed</code>, a pattern prefixed with <code>!</code> <strong>blocks</strong>, and blocking wins
+      over every allow rule — use it to stop one compromised action even while "actions by verified creators" is
+      allowed. Patterns match public actions and reusable workflows; your own organisation's are covered by the "allow
+      the organisation's own" part of the policy.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="manage-runners-at-scale">Manage runners at scale</h2>
+
+  <h3 id="github-hosted-runners">GitHub-hosted runners</h3>
+  <p>
+    A GitHub-hosted runner is a fresh virtual machine for every job, deleted afterwards, with a large set of preinstalled
+    tools. Current labels, checked on {SITE.checked}:
+  </p>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Label</th><th>Image</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>ubuntu-latest</code></td><td>Ubuntu 24.04 → <strong>Ubuntu 26.04</strong></td><td>Gradual move between 19 October and 19 November 2026; pin <code>ubuntu-24.04</code> to stay</td></tr>
+        <tr><td><code>ubuntu-26.04</code>, <code>ubuntu-24.04</code>, <code>ubuntu-22.04</code></td><td>Ubuntu, x64</td><td><code>-arm</code> suffix for Arm64 (<code>ubuntu-24.04-arm</code>)</td></tr>
+        <tr><td><code>ubuntu-slim</code></td><td>A lightweight, container-based Linux runner</td><td>For quick, low-resource automation jobs</td></tr>
+        <tr><td><code>windows-latest</code>, <code>windows-2025</code></td><td>Windows Server 2025</td><td><code>windows-latest</code> moved from 2022 in September 2025; <code>windows-2022</code> still available</td></tr>
+        <tr><td><code>windows-11-arm</code></td><td>Windows 11, Arm64</td><td></td></tr>
+        <tr><td><code>macos-latest</code>, <code>macos-26</code></td><td>macOS 26, Arm64</td><td><code>macos-15</code> available; <code>macos-14</code> deprecated; Intel via <code>-intel</code> and <code>-large</code> labels</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    <strong>Larger runners</strong> (GitHub Team and Enterprise Cloud) add more CPU and memory, GPUs and Arm64 machines,
+    <strong>static public IP ranges</strong>, <strong>Azure private networking</strong> (the runner joins your Azure
+    virtual network) and <strong>custom images</strong>. They are created by organisation or enterprise owners, always
+    belong to a <strong>runner group</strong>, and autoscale up to a configured maximum.
+  </p>
+  <p>
+    <strong>Monitoring</strong>: organisation <strong>Insights → Actions usage metrics</strong> and
+    <strong>Actions performance metrics</strong> show minutes, job counts, queue times and failure rates by workflow,
+    repository and runner type; billing shows spend; the <code>workflow_job</code> webhook reports every job queued,
+    started and completed — the signal autoscalers use.
+  </p>
+
+  <h3 id="self-hosted-runners">Self-hosted runners</h3>
+  <p>
+    A self-hosted runner is your machine — physical, virtual, container or cloud — running GitHub's open-source runner
+    application. It opens an <strong>outbound HTTPS long poll</strong> to GitHub; no inbound port is needed. It can be
+    registered to a <strong>repository</strong>, an <strong>organisation</strong> or an <strong>enterprise</strong>.
+  </p>
+  <JobSteps job="Register a self-hosted runner">
+    <Step name="Choose the level and open the runner settings">
+      <p>
+        Repository, organisation or enterprise <strong>Settings → Actions → Runners → New self-hosted runner</strong>.
+        You need admin rights at that level. Pick the operating system and architecture.
+      </p>
+    </Step>
+    <Step name="Download and extract the runner package">
+      <p>
+        The page shows the download commands and a checksum to verify. The runner keeps itself up to date after that.
+      </p>
+    </Step>
+    <Step name="Configure it with a registration token" open>
+      <p>
+        The page's token is valid for <strong>one hour</strong> (or create one with
+        <code>POST /orgs/{'{org}'}/actions/runners/registration-token</code>). Add a name, labels and a group:
+      </p>
+      <CodeBlock lang="bash" label="shell" code={registerScript} />
+    </Step>
+    <Step name="Run it as a service">
+      <p>
+        <code>./run.sh</code> runs interactively; <code>svc.sh</code> (Linux, macOS) or the Windows service option
+        keeps it running after reboots.
+      </p>
+    </Step>
+    <Step name="Target it from a workflow">
+      <p>Every runner gets the default labels <code>self-hosted</code>, its OS and its architecture, plus yours:</p>
+      <CodeBlock file=".github/workflows/build.yml" excerpt code={runsOnSelf} />
+    </Step>
+  </JobSteps>
+  <ul>
+    <li><strong>Ephemeral</strong> runners (<code>--ephemeral</code>, or a just-in-time config from <code>generate-jitconfig</code>) take a single job and de-register — clean state every time, and the pattern autoscalers use.</li>
+    <li><strong>Actions Runner Controller (ARC)</strong> runs autoscaling ephemeral runners on Kubernetes as <strong>runner scale sets</strong>, installed with Helm; workflows target the scale set's name in <code>runs-on</code>.</li>
+    <li>A runner that has not connected for <strong>14 days</strong> is removed automatically (<strong>1 day</strong> for ephemeral runners).</li>
+    <li>Runners update themselves; one that has not updated within <strong>30 days</strong> of a new release stops receiving jobs. Pin images to a current version if you disable auto-update.</li>
+    <li>A self-hosted job can run for up to <strong>5 days</strong> and wait up to <strong>24 hours</strong> in the queue.</li>
+  </ul>
+  <Callout type="caution" title="Never attach self-hosted runners to public repositories">
+    <p>
+      Anyone who opens a pull request from a fork could run code on the machine, and a persistent runner keeps whatever
+      that code leaves behind. Use GitHub-hosted runners for public repositories, and ephemeral, isolated runners for
+      anything that runs untrusted code. Runner groups do not allow public repositories unless you tick that option.
+    </p>
+  </Callout>
+
+  <h3 id="ip-allow-lists-and-networking">IP allow lists and networking</h3>
+  <ul>
+    <li>An organisation or enterprise <strong>IP allow list</strong> blocks access from any address not on it — including <strong>standard GitHub-hosted runners</strong>, whose addresses are dynamic. A workflow then fails to clone or call the API.</li>
+    <li>Fixes: run those jobs on <strong>larger runners with static IP ranges</strong> and add the ranges to the list, or on <strong>self-hosted runners</strong> with known egress addresses, or use <strong>Azure private networking</strong>.</li>
+    <li>GitHub publishes hosted-runner ranges in <code>GET /meta</code> (the <code>actions</code> key), but they are numerous and change — not a practical allow-list source.</li>
+    <li>Self-hosted runners need outbound access to GitHub's hosts, among them <code>github.com</code>, <code>api.github.com</code>, <code>*.actions.githubusercontent.com</code>, <code>codeload.github.com</code>, <code>results-receiver.actions.githubusercontent.com</code> and the blob storage used for artifacts, caches and logs.</li>
+    <li>Behind a proxy, set <code>https_proxy</code>, <code>http_proxy</code> and <code>no_proxy</code> in the runner's environment or its <code>.env</code> file. <code>./run.sh --check</code> tests connectivity.</li>
+  </ul>
+
+  <h3 id="runner-groups">Runner groups</h3>
+  <p>
+    A <strong>runner group</strong> is a set of runners with an access policy. Organisation groups choose which
+    <strong>repositories</strong> can use them; enterprise groups choose which <strong>organisations</strong>. Every
+    runner is in exactly one group — the <strong>Default</strong> group if you do not choose.
+  </p>
+  <ul>
+    <li><strong>Repository access</strong>: all repositories, or selected ones; <strong>public repositories</strong> only if explicitly allowed.</li>
+    <li><strong>Workflow access</strong>: optionally restrict the group to <strong>selected workflows</strong>, named by path and ref (<code>octo-org/platform/.github/workflows/deploy.yml@refs/heads/main</code>) — the way to keep production runners for the deploy pipeline only.</li>
+    <li>Target a group with <code>runs-on: group:</code>, optionally narrowed with <code>labels:</code>.</li>
+    <li>Moving a runner between groups is a setting; it keeps its labels.</li>
+  </ul>
+  <Mermaid
+    code={runnerTrouble}
+    caption="Troubleshooting a job that never starts. On the runner itself, the _diag folder holds Runner_ and Worker_ logs; the runner list shows each runner as Idle, Active or Offline."
+  />
+
+  <h3 id="preinstalled-software">Preinstalled software and the toolcache</h3>
+  <p>
+    Every GitHub-hosted image is built from the <code>actions/runner-images</code> repository, which publishes a
+    <strong>README per image</strong> listing every tool and version, and <strong>release notes</strong> for each weekly
+    image update. The <strong>Set up job</strong> step of every job prints the exact image and version, with links:
+  </p>
+  <CodeBlock lang="log" title="Set up job" status="success" open code={setupJobLog} />
+  <ul>
+    <li>The <strong>toolcache</strong> (<code>$RUNNER_TOOL_CACHE</code>) holds several versions of runtimes such as Node.js, Python, Go, Java and Ruby. <code>setup-*</code> actions use a cached version first and download others.</li>
+    <li><code>$ImageOS</code> and <code>$ImageVersion</code> identify the image inside a step.</li>
+    <li>Upcoming changes — a <code>-latest</code> label moving, a tool removed — are announced in the runner-images repository and the GitHub Changelog weeks ahead.</li>
+  </ul>
+  <p><strong>Installing more at runtime</strong>, from cheapest to most work:</p>
+  <CodeBlock file=".github/workflows/tools.yml" excerpt code={installAtRuntime} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Approach</th><th>When</th></tr></thead>
+      <tbody>
+        <tr><td><code>setup-*</code> actions</td><td>Language runtimes at a chosen version, with built-in dependency caching</td></tr>
+        <tr><td>Package managers — <code>apt-get</code> (with passwordless <code>sudo</code>), <code>brew</code>, <code>choco</code>, <code>winget</code></td><td>A few system tools</td></tr>
+        <tr><td><code>actions/cache</code></td><td>Downloads that are slow to repeat</td></tr>
+        <tr><td><code>container:</code> on the job</td><td>A whole prepared toolchain in an image you control</td></tr>
+        <tr><td>Custom images — larger-runner custom images, or your own self-hosted image</td><td>Heavy or licensed toolchains used by many jobs</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="manage-secrets-and-variables">Manage encrypted secrets and variables</h2>
+
+  <h3 id="define-and-scope">Define and scope secrets and variables</h3>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Scope</th><th>Secrets</th><th>Variables</th><th>Who sees them</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Organisation</strong></td><td>Up to 1,000</td><td>Up to 1,000</td><td>Repositories chosen by the access policy: <strong>all</strong>, <strong>private and internal</strong>, or <strong>selected</strong></td></tr>
+        <tr><td><strong>Repository</strong></td><td>Up to 100</td><td>Up to 500</td><td>All workflows in the repository</td></tr>
+        <tr><td><strong>Environment</strong></td><td>Up to 100</td><td>Up to 100</td><td>Only jobs that reference the environment, after its protection rules pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul>
+    <li>When names collide, the <strong>most specific scope wins</strong>: environment, then repository, then organisation.</li>
+    <li>Each secret or variable is limited to <strong>48 KB</strong>; organisation and repository variables together are limited to 256 KB per run. A workflow sees at most 100 organisation secrets (the first 100 alphabetically).</li>
+    <li>Names: letters, digits and underscores; not starting with a digit or <code>GITHUB_</code>; stored upper-case and matched case-insensitively.</li>
+    <li><strong>Secrets</strong> are encrypted client-side (libsodium sealed boxes), write-only in the UI, and masked in logs. <strong>Variables</strong> are plain text, readable in the UI and in logs — for configuration, never credentials.</li>
+    <li>Dependabot and Codespaces have their <strong>own</strong> secret stores; Actions secrets are not passed to Dependabot-triggered runs, which get Dependabot secrets instead.</li>
+    <li>Secrets are <strong>not</strong> passed to workflows triggered by pull requests from forks (apart from a read-only <code>GITHUB_TOKEN</code>).</li>
+  </ul>
+
+  <h3 id="use-secrets-and-variables">Access and use them in workflows and actions</h3>
+  <CodeBlock file=".github/workflows/deploy.yml" excerpt code={useSecrets} />
+  <ul>
+    <li><code>secrets.NAME</code> and <code>vars.NAME</code> are expression contexts; map them into <code>env</code> or <code>with</code>. An unset secret evaluates to an empty string, not an error.</li>
+    <li>Actions never read secrets on their own: JavaScript and Docker actions get them as inputs or environment variables; composite actions only through <code>inputs</code>.</li>
+    <li>Reusable workflows receive secrets only when the caller passes them explicitly or with <code>secrets: inherit</code>.</li>
+    <li><code>GITHUB_TOKEN</code> is available as <code>secrets.GITHUB_TOKEN</code> and <code>github.token</code> without being created.</li>
+  </ul>
+
+  <h3 id="manage-them-programmatically">Manage them programmatically</h3>
+  <CodeBlock lang="bash" label="gh" code={secretsApi} />
+  <CodeBlock lang="http" label="REST endpoints" code={secretsRest} />
+  <Callout type="exam" title="Secrets go in encrypted; nothing comes back out">
+    <p>
+      The REST API never returns a secret's value — <code>GET</code> returns only its name, dates and (for organisation
+      secrets) visibility. To create or update one you must first fetch the scope's <strong>public key</strong> and
+      encrypt the value with it; the request carries <code>encrypted_value</code> and <code>key_id</code>. Managing
+      secrets needs admin access to the repository (or the fine-grained <strong>Secrets</strong> write permission);
+      organisation secrets need organisation admin rights.
+    </p>
+  </Callout>
+  <p>
+    Security of the token itself — its permissions, lifetime and alternatives — is in
+    <a href={`${href('skill-5-secure-optimize')}#github-token-and-pats`}>Skill 5</a>.
+  </p>
+</NoteLayout>

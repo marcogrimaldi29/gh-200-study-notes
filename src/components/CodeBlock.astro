@@ -1,0 +1,118 @@
+---
+import { Code } from 'astro:components';
+import { transformerWorkflowExpressions } from '../lib/shiki-expressions';
+import LogPanel from './LogPanel.astro';
+import Octicon from './Octicon.astro';
+import type { Status } from './StatusIcon.astro';
+
+/**
+ * Syntax-highlighted code, in three shapes:
+ *
+ * - A **file** (`file` set) gets a header bar like GitHub's file viewer: the
+ *   file-code Octicon, the path where the file lives, an "excerpt" Label when it
+ *   is not the whole file, and a copy button whose Octicon turns into a green
+ *   check once the copy succeeds (announced to screen readers).
+ * - A **snippet** that is not a file — a shell command, a lone expression —
+ *   gets just a language label.
+ * - A **log** (`lang="log"`) is handed to LogPanel and drawn like a job log.
+ *
+ * Highlighting is done by Shiki at build time with GitHub's light and dark
+ * themes; in YAML, `${{ … }}` expressions are marked by a Shiki transformer so
+ * they stand out as they do in GitHub's workflow editor.
+ */
+interface Props {
+  code: string;
+  lang?: string;
+  /** Chip label for a snippet, when it should differ from the highlighter's language id. */
+  label?: string;
+  /** Path where the file lives, e.g. ".github/workflows/ci.yml". Makes this a file block. */
+  file?: string;
+  /** The block shows part of the file rather than all of it. */
+  excerpt?: boolean;
+  /** Log panels only: header title, status and whether groups start open. */
+  title?: string;
+  status?: Status;
+  open?: boolean;
+}
+
+const { code, lang = 'yaml', label, file, excerpt = false, title, status, open } = Astro.props;
+const yaml = lang === 'yaml' || lang === 'yml';
+
+// Drop surrounding blank lines and the indentation every line shares, but keep
+// relative indentation: a plain trim() would strip only the first line's
+// indent and break an excerpt lifted from deep inside a workflow.
+const NL = String.fromCharCode(10);
+const lines = code.replaceAll(String.fromCharCode(9), '  ').split(NL);
+while (lines.length && !lines[0].trim()) lines.shift();
+while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => l.length - l.trimStart().length));
+const source = lines.map((l) => l.slice(indent).trimEnd()).join(NL);
+const transformers = yaml ? [transformerWorkflowExpressions()] : [];
+---
+
+{
+  lang === 'log' ? (
+    <LogPanel code={code} title={title} status={status} open={open} />
+  ) : file ? (
+    <div class="code-block code-file">
+      <div class="file-head">
+        <Octicon name="file-code" />
+        <span class="file-path">{file}</span>
+        {excerpt && <span class="label l-neutral file-excerpt">excerpt</span>}
+        <button type="button" class="file-copy" aria-label={`Copy ${file}`}>
+          <Octicon name="copy" class="i-copy" />
+          <Octicon name="check" class="i-done" />
+        </button>
+        <span class="visually-hidden copy-status" role="status" aria-live="polite" />
+      </div>
+      <Code code={source} lang={lang as any} themes={{ light: 'github-light', dark: 'github-dark' }} transformers={transformers} />
+    </div>
+  ) : (
+    <div class="code-block">
+      <span class="lang">{label ?? lang}</span>
+      <Code code={source} lang={lang as any} themes={{ light: 'github-light', dark: 'github-dark' }} transformers={transformers} />
+    </div>
+  )
+}
+
+<script>
+  // One delegated listener for every file block on the page.
+  document.addEventListener('click', async (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.file-copy');
+    if (!btn) return;
+    const block = btn.closest('.code-file');
+    const pre = block?.querySelector('pre');
+    const status = block?.querySelector('.copy-status');
+    if (!pre) return;
+    const text = pre.textContent ?? '';
+    // The async Clipboard API is blocked in some embeds and non-secure
+    // contexts; fall back to a hidden textarea and execCommand there.
+    const fallback = () => {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      area.remove();
+      btn.focus({ preventScroll: true });
+      if (!ok) throw new Error('copy refused');
+    };
+    try {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        fallback();
+      }
+      btn.classList.add('copied');
+      if (status) status.textContent = 'Copied to clipboard';
+      window.setTimeout(() => {
+        btn.classList.remove('copied');
+        if (status) status.textContent = '';
+      }, 2000);
+    } catch {
+      if (status) status.textContent = 'Copy failed';
+    }
+  });
+</script>

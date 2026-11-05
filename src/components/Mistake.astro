@@ -1,0 +1,34 @@
+---
+import StatusIcon from './StatusIcon.astro';
+
+/**
+ * A commonly mistaken topic, read as a failed run and the run that fixed it:
+ * the trap behind a red failure icon, the correct answer behind a green
+ * success icon. Both rows carry a visible word as well, so colour never
+ * carries the meaning alone.
+ *
+ *   <Mistake topic="…">
+ *     <Fragment slot="trap">…</Fragment>
+ *     <Fragment slot="fix">…</Fragment>
+ *   </Mistake>
+ */
+interface Props {
+  topic: string;
+}
+
+const { topic } = Astro.props;
+---
+
+<div class="mistake">
+  <div class="mk-topic">{topic}</div>
+  <div class="mk-row mk-fail">
+    <StatusIcon status="failure" label="" />
+    <span class="mk-label">Trap</span>
+    <div class="mk-text"><slot name="trap" /></div>
+  </div>
+  <div class="mk-row mk-pass">
+    <StatusIcon status="success" label="" />
+    <span class="mk-label">Correct</span>
+    <div class="mk-text"><slot name="fix" /></div>
+  </div>
+</div>

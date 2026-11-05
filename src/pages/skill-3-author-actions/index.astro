@@ -1,0 +1,487 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import JobSteps from '../../components/JobSteps.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Step from '../../components/Step.astro';
+import { SITE } from '../../data/site';
+import { href } from '../../lib/urls';
+
+const whichType = `
+flowchart TD
+  Q["What does the action need?"] --> A{"Only a few steps that<br/>already work in a workflow?"}
+  A -->|"yes"| COMP["Composite action<br/>runs.using: composite"]
+  A -->|"no"| B{"A specific OS toolchain or<br/>system packages, Linux only?"}
+  B -->|"yes"| DOCK["Docker container action<br/>runs.using: docker"]
+  B -->|"no — fast, any OS,<br/>talks to the API"| JS["JavaScript action<br/>runs.using: node24"]
+`;
+
+const jsAction = `name: Add PR label
+description: Adds a label to the pull request that triggered the workflow
+author: octo-org
+
+inputs:
+  label:
+    description: Label to add
+    required: true
+  github-token:
+    description: Token used to call the API
+    default: \${{ github.token }}
+
+outputs:
+  added:
+    description: "'true' when the label was added"
+
+runs:
+  using: node24            # node20 was removed from the runners in September 2026
+  main: dist/index.js      # bundled: dependencies are not installed for you
+  post: dist/cleanup.js    # optional; pre: runs before, post: after the job
+
+branding:
+  icon: tag
+  color: blue`;
+
+const jsSource = `import * as core from '@actions/core';
+import * as github from '@actions/github';
+
+try {
+  const label = core.getInput('label', { required: true });
+  const octokit = github.getOctokit(core.getInput('github-token'));
+  const { owner, repo } = github.context.repo;
+  const number = github.context.payload.pull_request?.number;
+
+  if (!number) {
+    core.notice('Not a pull request event; nothing to label.');
+  } else {
+    core.startGroup('Calling the API');
+    await octokit.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [label] });
+    core.endGroup();
+    core.setOutput('added', 'true');                 // → $GITHUB_OUTPUT
+    await core.summary.addHeading('Label added').addRaw(\`Added \${label} to #\${number}\`).write();
+  }
+} catch (error) {
+  core.setFailed(error instanceof Error ? error.message : String(error));   // exit code 1
+}`;
+
+const dockerAction = `name: Markdown lint
+description: Lints Markdown files in a container
+
+inputs:
+  globs:
+    description: Files to lint
+    default: '**/*.md'
+
+outputs:
+  problems:
+    description: Number of problems found
+
+runs:
+  using: docker
+  image: Dockerfile          # built on every run — or a prebuilt docker://image:tag
+  args:
+    - \${{ inputs.globs }}
+  env:
+    LINT_STRICT: 'true'`;
+
+const dockerfile = `FROM node:24-alpine
+RUN npm install --global markdownlint-cli2
+COPY entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]`;
+
+const entrypoint = `#!/bin/sh -l
+# The workspace is mounted at /github/workspace; GITHUB_OUTPUT points at a mounted file.
+problems=$(markdownlint-cli2 "$1" 2>&1 | grep -c ':' || true)
+echo "problems=$problems" >> "$GITHUB_OUTPUT"
+if [ "$problems" -gt 0 ]; then
+  echo "::error::$problems Markdown problems found"
+  exit 1
+fi`;
+
+const compositeAction = `name: Install and build
+description: Installs dependencies with caching, then builds
+
+inputs:
+  node-version:
+    description: Node.js version
+    default: '24'
+  working-directory:
+    description: Folder that holds package.json
+    default: '.'
+
+outputs:
+  build-dir:
+    description: Where the build output is
+    value: \${{ steps.build.outputs.dir }}     # composite outputs need a value
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: \${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: \${{ inputs.working-directory }}/package-lock.json
+    - run: npm ci
+      shell: bash                                # required on every run step
+      working-directory: \${{ inputs.working-directory }}
+    - id: build
+      shell: bash
+      working-directory: \${{ inputs.working-directory }}
+      env:
+        WORKDIR: \${{ inputs.working-directory }}
+      run: |
+        npm run build
+        echo "dir=$WORKDIR/dist" >> "$GITHUB_OUTPUT"`;
+
+const useActions = `steps:
+  - uses: actions/checkout@v7                       # needed before a local action
+  - uses: ./.github/actions/install-and-build         # local: path in this repository
+    id: build
+    with:
+      working-directory: web
+  - uses: octo-org/add-pr-label@v2                    # public or shared private repository
+    with:
+      label: built
+  - uses: octo-org/monorepo/actions/notify@v1         # an action in a subdirectory
+  - uses: docker://ghcr.io/octo-org/lint:3.2          # a published container image
+  - run: echo "Output is in \${{ steps.build.outputs.build-dir }}"`;
+
+const troubleLog = `::group::Run octo-org/add-pr-label@v2
+with:
+  label: built
+  github-token: ***
+::endgroup::
+node:internal/modules/esm/resolve:873
+Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@actions/core' imported from /home/runner/work/_actions/octo-org/add-pr-label/v2/src/index.js
+::error::Cannot find package '@actions/core'`;
+
+const treeJs = `add-pr-label/
+├── action.yml          # metadata — required, at the root for a published action
+├── dist/
+│   ├── index.js        # bundled entry point (ncc, esbuild or Rollup), committed
+│   └── cleanup.js
+├── src/index.js        # source
+├── package.json
+├── README.md           # inputs, outputs, an example workflow
+└── LICENSE`;
+
+const treeDocker = `markdown-lint/
+├── action.yml
+├── Dockerfile
+├── entrypoint.sh       # must be executable: git update-index --chmod=+x entrypoint.sh
+├── README.md
+└── LICENSE`;
+
+const treeLocal = `my-service/
+└── .github/
+    ├── actions/
+    │   └── install-and-build/
+    │       └── action.yml      # uses: ./.github/actions/install-and-build
+    └── workflows/
+        └── ci.yml`;
+
+const stopCommands = `TOKEN=$(uuidgen)
+echo "::stop-commands::$TOKEN"     # stop treating :: lines as commands
+cat untrusted-output.log           # a line like ::set-env… is now just text
+echo "::$TOKEN::"                  # resume`;
+
+const tags = `
+flowchart LR
+  V1["tag v1<br/>moves with each v1 release"] --> C3["commit c3f9a21<br/>release v1.2.1"]
+  V11["tag v1.2.1<br/>immutable release"] --> C3
+  V12["tag v1.2.0<br/>immutable release"] --> C2["commit 8b7e4d0"]
+  SHA["@c3f9a21…<br/>full SHA pin"] --> C3
+`;
+
+const releaseWorkflow = `name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  move-major-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Point v<major> at this release
+        env:
+          TAG: \${{ github.event.release.tag_name }}   # e.g. v1.2.1
+        run: |
+          MAJOR="\${TAG%%.*}"                          # v1
+          git tag -f "$MAJOR" "$TAG"
+          git push origin "$MAJOR" --force`;
+---
+
+<NoteLayout
+  slug="skill-3-author-actions"
+  description="GH-200 Skill 3, Author and maintain actions: JavaScript, Docker container and composite actions, action.yml metadata and directory structure, workflow commands and the toolkit inside actions, troubleshooting, immutable actions and what replaced them, distribution models, publishing to the Marketplace and versioning."
+  intro="Building your own actions. The three action types and when each fits, the files and metadata an action needs, how an action talks to the runner, why actions fail and how to read it, and how to share, publish and version an action so its users can trust what they pin."
+>
+  <!-- ================================================================= -->
+  <h2 id="create-custom-actions">Create and troubleshoot custom actions</h2>
+
+  <h3 id="action-types">Action types</h3>
+  <Mermaid
+    code={whichType}
+    caption="Choose the simplest type that does the job. Composite actions reuse existing steps; JavaScript actions run directly on the runner on any OS; Docker actions bring their own environment but only run on Linux runners."
+  />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th></th><th>JavaScript</th><th>Docker container</th><th>Composite</th></tr></thead>
+      <tbody>
+        <tr><td><strong><code>runs.using</code></strong></td><td><code>node24</code></td><td><code>docker</code></td><td><code>composite</code></td></tr>
+        <tr><td><strong>Runs on</strong></td><td>Linux, Windows, macOS</td><td><strong>Linux only</strong> (and Docker on self-hosted)</td><td>Whatever its steps support</td></tr>
+        <tr><td><strong>Speed</strong></td><td>Fastest — no container to build</td><td>Slowest — image built or pulled each run</td><td>As fast as its steps</td></tr>
+        <tr><td><strong>Entry point</strong></td><td><code>main</code>, optional <code>pre</code> and <code>post</code></td><td><code>image</code>, <code>args</code>, <code>entrypoint</code>, <code>pre-entrypoint</code>, <code>post-entrypoint</code></td><td><code>steps</code></td></tr>
+        <tr><td><strong>Dependencies</strong></td><td>Bundled into <code>dist/</code> or committed <code>node_modules</code></td><td>Installed in the image</td><td>Other actions and the runner's tools</td></tr>
+        <tr><td><strong>Best for</strong></td><td>API calls, logic, cross-platform tools</td><td>A fixed toolchain or language other than JavaScript</td><td>Sharing a sequence of steps</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="javascript-actions">JavaScript actions</h3>
+  <CodeBlock file="action.yml" code={jsAction} />
+  <CodeBlock lang="javascript" file="src/index.js" code={jsSource} />
+  <ul>
+    <li>The runner runs <code>main</code> with its <strong>own bundled Node.js</strong> — the version named in <code>runs.using</code>, regardless of what <code>setup-node</code> installed for the job. Today that is <code>node24</code>: Node 24 became the default on 16 June 2026 and Node 20 was removed on 23 September 2026.</li>
+    <li>The runner does <strong>not</strong> run <code>npm install</code>. Commit a bundle (<code>@vercel/ncc</code>, esbuild, Rollup) or <code>node_modules</code>.</li>
+    <li>The toolkit packages — <code>@actions/core</code>, <code>@actions/github</code>, <code>@actions/exec</code>, <code>@actions/tool-cache</code>, <code>@actions/cache</code>, <code>@actions/artifact</code> — wrap workflow commands and the API. The current majors are ESM-only.</li>
+    <li><code>pre</code> and <code>post</code> run before and after the job's steps (with <code>pre-if</code> and <code>post-if</code> to condition them); state passes from <code>main</code> to <code>post</code> with <code>core.saveState</code> / <code>core.getState</code>, which use <code>$GITHUB_STATE</code>.</li>
+  </ul>
+
+  <h3 id="docker-container-actions">Docker container actions</h3>
+  <CodeBlock file="action.yml" code={dockerAction} />
+  <CodeBlock lang="docker" file="Dockerfile" code={dockerfile} />
+  <CodeBlock lang="bash" file="entrypoint.sh" code={entrypoint} />
+  <ul>
+    <li><code>image</code> is either a path to a <code>Dockerfile</code> (built on every run, which is slow) or <code>docker://</code> plus a published image (pulled — faster, and pinnable by digest).</li>
+    <li><code>args</code> are passed to the entry point; <code>inputs</code> also arrive as <code>INPUT_&lt;NAME&gt;</code> environment variables (upper-cased, spaces to underscores).</li>
+    <li>The runner mounts the workspace at <code>/github/workspace</code> and sets it as the working directory; do not set <code>WORKDIR</code> or <code>USER</code> in the Dockerfile — GitHub runs the container as root by default and expects the workspace path.</li>
+    <li>Only <strong>Linux</strong> runners can run them. On Windows or macOS the step fails with <em>Container action is only supported on Linux</em>.</li>
+  </ul>
+
+  <h3 id="composite-actions">Composite actions</h3>
+  <CodeBlock file=".github/actions/install-and-build/action.yml" code={compositeAction} />
+  <ul>
+    <li>Every <code>run</code> step needs an explicit <code>shell</code> — there is no default inside a composite action.</li>
+    <li>Outputs need a <code>value</code> that maps a step output; JavaScript and Docker actions set outputs at runtime instead.</li>
+    <li>A composite action can <code>uses:</code> other actions (including composites), and its steps run on the <strong>caller's runner</strong>, in the caller's job, with the caller's <code>GITHUB_TOKEN</code>.</li>
+    <li>It has no access to the <code>secrets</code> context — pass what it needs through <code>inputs</code>.</li>
+    <li>In the log it appears as one step, with its own steps folded inside.</li>
+  </ul>
+  <CodeBlock file=".github/workflows/ci.yml" excerpt code={useActions} />
+
+  <h3 id="immutable-actions-and-what-shipped-instead">Immutable actions and what shipped instead</h3>
+  <p>
+    The study guide asks you to "understand the immutable actions rollout on hosted runners and implications for version
+    pinning and registry sources". The product moved on after the guide was written, so it helps to know both the plan
+    and what actually shipped. Checked on {SITE.checked}:
+  </p>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Item</th><th>What it is</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Immutable actions</strong></td><td>Actions published as OCI packages to <code>ghcr.io</code> (via <code>actions/publish-immutable-action</code>) and downloaded by runners from <code>pkg.actions.githubusercontent.com</code>, so a version could never change after publication</td><td>Previewed in 2025, then <strong>removed from GitHub's public roadmap on 11 December 2025</strong> in favour of building on immutable releases</td></tr>
+        <tr><td><strong>Immutable releases</strong></td><td>A repository or organisation setting: once a release is published, its tag cannot be moved or deleted and its assets cannot change</td><td>Generally available since October 2025</td></tr>
+        <tr><td><strong>SHA pinning policy</strong></td><td>The allowed-actions policy can require every action to be pinned to a full commit SHA</td><td>Available since August 2025</td></tr>
+        <tr><td><strong>Workflow lockfiles</strong></td><td><code>.github/workflows/actions.lock</code>, generated by <code>gh actions-lock</code>, records the exact commit of every action and its transitive dependencies; a <strong>Require lockfile</strong> policy enforces it</td><td>Generally available since <strong>28 October 2026</strong> (not on GitHub Enterprise Server)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>Implications to carry into the exam:</strong></p>
+  <ul>
+    <li>A tag such as <code>@v2</code> is a <strong>mutable</strong> reference: the maintainer moves it with every release. Only a full commit SHA — or a commit recorded in a lockfile — is guaranteed to be the code you reviewed.</li>
+    <li>Immutable releases protect the tag of a <em>release</em> (<code>v2.3.1</code>), not a floating major tag that is not itself a release.</li>
+    <li>On self-hosted runners, the 2025 rollout asked administrators to allow <code>pkg.actions.githubusercontent.com</code> (covered by <code>*.actions.githubusercontent.com</code>); runners that could not reach it were opted out automatically. If a question mentions that host, it is about this rollout.</li>
+    <li>On GitHub Enterprise Server, actions from GitHub.com come through <strong>GitHub Connect</strong> or are copied in with <code>actions-sync</code> — the "registry source" the action is really downloaded from.</li>
+  </ul>
+  <Callout type="exam" title="If an answer option says 'use immutable actions'">
+    <p>
+      Read it as "make the version you run unchangeable". Today that is done by <strong>pinning to a full commit
+      SHA</strong> (optionally enforced by policy), by a <strong>workflow lockfile</strong>, or — for the publisher — by
+      turning on <strong>immutable releases</strong>. The difference between the study guide and the current product is
+      listed in the <a href={`${href('exam-tips')}#where-the-study-guide-and-the-docs-disagree`}>exam tips</a>.
+    </p>
+  </Callout>
+
+  <h3 id="troubleshoot-actions">Troubleshoot action execution and errors</h3>
+  <CodeBlock lang="log" title="Run octo-org/add-pr-label@v2" status="failure" open code={troubleLog} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Error</th><th>Cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td><code>Cannot find package '@actions/core'</code></td><td>Dependencies not bundled or committed</td><td>Bundle into <code>dist/</code> and point <code>main</code> at it</td></tr>
+        <tr><td><code>Can't find 'action.yml', 'action.yaml' or 'Dockerfile'</code></td><td>Local action used before <code>actions/checkout</code>, wrong path, or file in the wrong folder</td><td>Check out first; use the folder path, not the file</td></tr>
+        <tr><td><code>Required property is missing: shell</code></td><td>A composite <code>run</code> step without <code>shell</code></td><td>Add <code>shell: bash</code> (or <code>pwsh</code>…)</td></tr>
+        <tr><td>An old action starts failing after September 2026</td><td>It declares <code>node20</code> (or older); runners now run every JavaScript action on Node 24, which it was never tested on, and the <code>ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION</code> opt-out is gone</td><td>Upgrade to a release that declares <code>node24</code>, or publish one</td></tr>
+        <tr><td><code>exec /entrypoint.sh: permission denied</code></td><td>Entry point not executable in Git</td><td><code>git update-index --chmod=+x entrypoint.sh</code></td></tr>
+        <tr><td><code>Container action is only supported on Linux</code></td><td>Docker action on a Windows or macOS runner</td><td>Run that job on Linux, or rewrite as JavaScript</td></tr>
+        <tr><td><code>Input required and not supplied: label</code></td><td><code>required: true</code> input missing from <code>with:</code></td><td>Pass it; note that <code>required</code> is enforced by the toolkit's <code>getInput(…, {'{ required: true }'})</code>, not by the runner</td></tr>
+        <tr><td>Unexpected input warning</td><td>A <code>with:</code> key the action does not declare</td><td>Check spelling against <code>action.yml</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Turn on step debug logging (<code>ACTIONS_STEP_DEBUG</code>) to see <code>core.debug()</code> output and the inputs
+    the action actually received; test JavaScript actions locally by setting <code>INPUT_*</code> variables; and give the
+    action a test workflow in its own repository that runs it with <code>uses: ./</code>.
+  </p>
+
+  <!-- ================================================================= -->
+  <h2 id="action-structure-and-metadata">Define action structure and metadata</h2>
+
+  <h3 id="required-files-and-layout">Required files and directory structure</h3>
+  <CodeBlock lang="text" label="JavaScript action" code={treeJs} />
+  <CodeBlock lang="text" label="Docker action" code={treeDocker} />
+  <CodeBlock lang="text" label="local action" code={treeLocal} />
+  <p>
+    The only file every action needs is its <strong>metadata file</strong>, <code>action.yml</code> or
+    <code>action.yaml</code>. For a published action it sits at the root of the repository; an action in a subdirectory
+    is referenced as <code>owner/repo/path@ref</code>. A README with inputs, outputs and an example, and a licence, are
+    what users — and the Marketplace — expect.
+  </p>
+
+  <h3 id="metadata-syntax">Metadata syntax</h3>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Key</th><th>Required</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>name</code></td><td>Yes</td><td>Shown in the Actions tab and the Marketplace; must be unique there</td></tr>
+        <tr><td><code>description</code></td><td>Yes</td><td>One short sentence</td></tr>
+        <tr><td><code>author</code></td><td>No</td><td></td></tr>
+        <tr><td><code>inputs.&lt;id&gt;</code></td><td>No</td><td><code>description</code> (required), <code>required</code>, <code>default</code>, <code>deprecationMessage</code>. Read as <code>INPUT_&lt;ID&gt;</code> or <code>core.getInput()</code>; in composites as <code>{'${{ inputs.id }}'}</code></td></tr>
+        <tr><td><code>outputs.&lt;id&gt;</code></td><td>No</td><td><code>description</code>; composites also need <code>value</code></td></tr>
+        <tr><td><code>runs</code></td><td>Yes</td><td><code>using</code> plus the type's own keys</td></tr>
+        <tr><td><code>branding</code></td><td>No</td><td><code>icon</code> (a Feather icon name) and <code>color</code> (white, black, yellow, blue, green, orange, red, purple, gray-dark) for the Marketplace badge</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="workflow-commands-within-actions">Workflow commands within actions</h3>
+  <p>
+    An action talks to the runner exactly as a <code>run:</code> step does — through workflow commands on standard output
+    and environment files. In JavaScript the toolkit does it for you; in Docker and composite actions you write them
+    yourself.
+  </p>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Toolkit (<code>@actions/core</code>)</th><th>Shell equivalent</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><code>getInput('name')</code></td><td><code>$INPUT_NAME</code></td><td>Read an input</td></tr>
+        <tr><td><code>setOutput('k', v)</code></td><td><code>echo "k=v" &gt;&gt; "$GITHUB_OUTPUT"</code></td><td>Set an output</td></tr>
+        <tr><td><code>exportVariable('K', v)</code></td><td><code>echo "K=v" &gt;&gt; "$GITHUB_ENV"</code></td><td>Env var for later steps</td></tr>
+        <tr><td><code>addPath(dir)</code></td><td><code>echo "dir" &gt;&gt; "$GITHUB_PATH"</code></td><td>Prepend to <code>PATH</code> for later steps</td></tr>
+        <tr><td><code>setSecret(v)</code></td><td><code>echo "::add-mask::v"</code></td><td>Mask a value in logs</td></tr>
+        <tr><td><code>saveState</code> / <code>getState</code></td><td><code>$GITHUB_STATE</code> / <code>$STATE_k</code></td><td>Pass state from <code>pre</code>/<code>main</code> to <code>post</code></td></tr>
+        <tr><td><code>startGroup</code> / <code>endGroup</code></td><td><code>::group::title</code> / <code>::endgroup::</code></td><td>Fold log lines</td></tr>
+        <tr><td><code>error</code> · <code>warning</code> · <code>notice</code></td><td><code>::error file=…,line=…::msg</code></td><td>Annotations on the run and the PR diff</td></tr>
+        <tr><td><code>debug(msg)</code></td><td><code>::debug::msg</code></td><td>Only with step debug logging</td></tr>
+        <tr><td><code>summary.addRaw(…).write()</code></td><td><code>&gt;&gt; "$GITHUB_STEP_SUMMARY"</code></td><td>Job summary Markdown</td></tr>
+        <tr><td><code>setFailed(msg)</code></td><td><code>echo "::error::msg"; exit 1</code></td><td>Fail the step</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    When an action prints output it does not control — a test runner, a log file — use <code>::stop-commands::</code>
+    with a one-off token so that lines beginning with <code>::</code> are not interpreted as commands:
+  </p>
+  <CodeBlock lang="bash" label="shell" code={stopCommands} />
+
+  <!-- ================================================================= -->
+  <h2 id="distribute-and-maintain-actions">Distribute and maintain actions</h2>
+
+  <h3 id="distribution-models">Distribution models</h3>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Model</th><th>Who can use it</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Local</strong></td><td>Workflows in the same repository</td><td><code>uses: ./path</code> after checkout; versioned with the repository itself</td></tr>
+        <tr><td><strong>Public repository</strong></td><td>Anyone</td><td><code>uses: owner/repo@ref</code>, with or without a Marketplace listing</td></tr>
+        <tr><td><strong>Private repository</strong></td><td>Repositories you allow</td><td>In the action's repository: <strong>Settings → Actions → General → Access</strong> → accessible from repositories owned by the user, the organisation or the enterprise</td></tr>
+        <tr><td><strong>Internal repository</strong></td><td>The enterprise's organisations</td><td>The same Access setting, at enterprise scope</td></tr>
+        <tr><td><strong>GitHub Marketplace</strong></td><td>Anyone, discoverable by search</td><td>A public repository with one action at its root, published from a release</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <Callout type="note" title="Private actions and reusable workflows share one switch">
+    <p>
+      The same <strong>Access</strong> setting shares both actions and reusable workflows from a private or internal
+      repository. Sharing does not give the caller read access to the code itself — only the right to run it.
+    </p>
+  </Callout>
+
+  <h3 id="publish-to-the-marketplace">Publish an action to the GitHub Marketplace</h3>
+  <JobSteps job="Publish an action to the GitHub Marketplace">
+    <Step name="Prepare the repository">
+      <p>
+        The action must live in a <strong>public</strong> repository that holds a <strong>single action</strong>, with
+        its <code>action.yml</code> at the <strong>root</strong> and no workflow files. Its <code>name</code> must be
+        unique in the Marketplace and must not match a Marketplace category, a GitHub feature, or another user or
+        organisation.
+      </p>
+    </Step>
+    <Step name="Add the metadata the listing shows">
+      <p>
+        A clear <code>description</code>, <code>branding</code> (<code>icon</code> and <code>color</code>), and a README
+        with inputs, outputs and a usage example. GitHub checks the metadata when you draft the release and lists any
+        problems.
+      </p>
+    </Step>
+    <Step name="Draft a release and tick Publish this Action to the GitHub Marketplace">
+      <p>
+        Under <strong>Releases → Draft a new release</strong>, the banner offers the option once
+        <code>action.yml</code> is detected. The first time, you accept the <strong>GitHub Marketplace Developer
+        Agreement</strong>.
+      </p>
+    </Step>
+    <Step name="Choose categories and a semantic version tag">
+      <p>
+        Pick a primary category (and optionally a second), then create a tag such as <code>v1.0.0</code> and write
+        release notes.
+      </p>
+    </Step>
+    <Step name="Publish the release">
+      <p>
+        The listing goes live. Later releases update it; un-ticking the option on a release, or delisting from the
+        listing page, removes it. Organisations that GitHub has verified get the <strong>verified creator</strong> badge
+        on their listings.
+      </p>
+    </Step>
+    <Step name="Point the major tag at the release">
+      <p>
+        Create or move <code>v1</code> so users who pin the major get the update — by hand or with a workflow like the
+        one below.
+      </p>
+    </Step>
+  </JobSteps>
+
+  <h3 id="versioning-and-release-strategies">Versioning and release strategies</h3>
+  <Mermaid
+    code={tags}
+    caption="A release tag (v1.2.1) and its commit are fixed; the major tag (v1) is moved by the maintainer to each new v1 release. A full SHA always means one commit."
+  />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Consumer reference</th><th>Gets</th><th>Trade-off</th></tr></thead>
+      <tbody>
+        <tr><td><code>@main</code></td><td>Whatever is on the branch now</td><td>Never for production — every push changes your workflow</td></tr>
+        <tr><td><code>@v1</code></td><td>The latest v1 release</td><td>Convenient, gets fixes; trusts the maintainer not to break or compromise it</td></tr>
+        <tr><td><code>@v1.2.1</code></td><td>That release</td><td>Stable; still a tag, unless it is an immutable release</td></tr>
+        <tr><td><code>@&lt;full SHA&gt; # v1.2.1</code></td><td>That exact commit</td><td>The only immutable reference; update with Dependabot or Renovate</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul>
+    <li>Follow <strong>semantic versioning</strong>: a breaking change — a removed input, a new required input, a Node runtime upgrade — is a new major (<code>v2</code>). Most first-party actions released a new major for <code>node24</code>.</li>
+    <li>Maintain the major tag (<code>v1</code>) for consumers who want updates, and keep the previous major working for a deprecation period.</li>
+    <li>Mark retiring inputs with <code>deprecationMessage</code>; the runner prints it as a warning whenever the input is used.</li>
+    <li>Test the action against its own test workflow before tagging; draft releases let you review notes before they are public.</li>
+    <li>With <strong>immutable releases</strong> on, a release's tag cannot be force-pushed — keep the floating major as a plain tag (not a release) if you move it.</li>
+  </ul>
+  <CodeBlock file=".github/workflows/release.yml" code={releaseWorkflow} />
+</NoteLayout>

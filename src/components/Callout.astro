@@ -1,0 +1,49 @@
+---
+import Octicon from './Octicon.astro';
+
+/**
+ * Boxed aside, styled as a GitHub Markdown alert. The notes' own kinds map
+ * onto GitHub's five alert types rather than inventing new colours:
+ *
+ *   exam       → IMPORTANT (purple)  an exam-specific caveat or trap
+ *   tip        → TIP (green)         a study or design recommendation
+ *   warn       → WARNING (orange)    something that will bite you
+ *   note       → NOTE (blue)         neutral background detail
+ *   code-note  → NOTE (blue)         a coding or configuration detail
+ *   rename     → NOTE (blue)         a renamed term to keep straight
+ *   retired    → WARNING (orange)    retired syntax you will still meet in old material
+ *   caution    → CAUTION (red)       a risk with a negative outcome
+ */
+interface Props {
+  type?: 'exam' | 'tip' | 'warn' | 'note' | 'code-note' | 'rename' | 'retired' | 'caution';
+  title?: string;
+}
+
+const { type = 'note', title } = Astro.props;
+
+const ALERTS = {
+  note: { kind: 'note', icon: 'info', name: 'Note' },
+  tip: { kind: 'tip', icon: 'light-bulb', name: 'Tip' },
+  important: { kind: 'important', icon: 'report', name: 'Important' },
+  warning: { kind: 'warning', icon: 'alert', name: 'Warning' },
+  caution: { kind: 'caution', icon: 'stop', name: 'Caution' },
+} as const;
+
+const map = {
+  exam: ALERTS.important,
+  tip: ALERTS.tip,
+  warn: ALERTS.warning,
+  note: ALERTS.note,
+  'code-note': ALERTS.note,
+  rename: ALERTS.note,
+  retired: ALERTS.warning,
+  caution: ALERTS.caution,
+} as const;
+
+const alert = map[type];
+---
+
+<div class={`callout callout-${alert.kind}`}>
+  <p class="callout-title"><Octicon name={alert.icon} />{title ?? alert.name}</p>
+  <slot />
+</div>

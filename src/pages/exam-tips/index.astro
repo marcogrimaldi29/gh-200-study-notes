@@ -1,0 +1,292 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import Mistake from '../../components/Mistake.astro';
+import { SITE } from '../../data/site';
+import { href } from '../../lib/urls';
+
+const whichReuse = `
+flowchart TD
+  Q["Share automation across repositories"] --> A{"Should later changes<br/>reach every user?"}
+  A -->|"no — a starting point"| T["Workflow template"]
+  A -->|"yes"| B{"Whole jobs, with their own<br/>runners, environments, secrets?"}
+  B -->|"yes"| R["Reusable workflow<br/>on: workflow_call"]
+  B -->|"no — steps inside a job"| C["Composite action"]
+`;
+
+const whichCredential = `
+flowchart TD
+  Q["The workflow must authenticate to…"] --> A{"This repository on GitHub?"}
+  A -->|"yes"| GT["GITHUB_TOKEN<br/>with minimal permissions"]
+  A -->|"no"| B{"A cloud provider?"}
+  B -->|"yes"| OIDC["OIDC federation<br/>id-token: write, no stored key"]
+  B -->|"no"| C{"Other repositories, or must<br/>trigger other workflows?"}
+  C -->|"yes"| APP["GitHub App installation token"]
+  C -->|"no — a third-party service"| SEC["Environment secret<br/>scoped to the deploying job"]
+`;
+---
+
+<NoteLayout
+  slug="exam-tips"
+  description="GH-200 final review: key numbers and limits, renames and retired syntax, where the study guide, the Learn modules and the GitHub docs disagree, commonly mistaken topics shown as failed and fixed runs, decision trees, a scenario-to-answer table and a pre-exam checklist."
+  intro="Everything you want in your head the night before: the numbers that turn up in answer options, the places where the study guide, the Learn modules and the live documentation disagree, the mistakes candidates make most often, and a lookup table from typical scenario wording to the answer the exam expects."
+>
+  <!-- ================================================================= -->
+  <h2 id="key-numbers-and-limits">Key numbers and limits</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Number</th><th>What it is</th></tr></thead>
+      <tbody>
+        <tr><td><strong>{SITE.facts.minutes} min · {SITE.facts.passing}</strong></td><td>Exam time · passing score (out of 1,000); retake after 24 hours</td></tr>
+        <tr><td><strong>2 years</strong></td><td>Validity of the certification</td></tr>
+        <tr><td><strong>6 h · 5 days</strong></td><td>Maximum job time on GitHub-hosted · self-hosted runners</td></tr>
+        <tr><td><strong>360 min</strong></td><td>Default <code>timeout-minutes</code> for a job</td></tr>
+        <tr><td><strong>35 days</strong></td><td>Maximum life of a workflow run, waiting and approvals included</td></tr>
+        <tr><td><strong>24 h</strong></td><td>Queue limit for self-hosted jobs; maximum life of <code>GITHUB_TOKEN</code></td></tr>
+        <tr><td><strong>256</strong></td><td>Jobs a matrix can generate per run</td></tr>
+        <tr><td><strong>25 · 65,535</strong></td><td><code>workflow_dispatch</code> inputs · input payload characters</td></tr>
+        <tr><td><strong>10 · 50</strong></td><td>Reusable workflow nesting levels · unique reusable workflows per workflow file</td></tr>
+        <tr><td><strong>3</strong></td><td>Levels of <code>workflow_run</code> chaining; also tags per push that still create an event</td></tr>
+        <tr><td><strong>5 min · 60 days</strong></td><td>Shortest schedule interval · inactivity before public-repo schedules are disabled</td></tr>
+        <tr><td><strong>10 GB · 7 days</strong></td><td>Default cache storage per repository · eviction of caches not accessed</td></tr>
+        <tr><td><strong>90 days</strong></td><td>Default artifact and log retention (public 1–90, private and internal up to 400)</td></tr>
+        <tr><td><strong>30 days · 50</strong></td><td>Re-run window · re-runs per run</td></tr>
+        <tr><td><strong>6 · 43,200 min · 30 days</strong></td><td>Required reviewers per environment · maximum wait timer · approval wait before the job fails</td></tr>
+        <tr><td><strong>100 · 1,000 · 100</strong></td><td>Secrets per repository · organisation · environment (48 KB each)</td></tr>
+        <tr><td><strong>500 · 1,000 · 100</strong></td><td>Variables per repository · organisation · environment (48 KB each, 256 KB per run)</td></tr>
+        <tr><td><strong>1 MB · 50 MB</strong></td><td>One job output · all outputs in a run</td></tr>
+        <tr><td><strong>1 MiB · 20</strong></td><td>Job summary per step · step summaries shown per job</td></tr>
+        <tr><td><strong>14 days · 1 day</strong></td><td>Offline time before a self-hosted · ephemeral runner is removed</td></tr>
+        <tr><td><strong>30 days · 1 hour</strong></td><td>Runner update window before it stops getting jobs · registration token lifetime</td></tr>
+        <tr><td><strong>20 · 40 · 60 · 500</strong></td><td>Concurrent standard-runner jobs on Free · Pro · Team · Enterprise (macOS: 5, 5, 5, 50)</td></tr>
+        <tr><td><strong>1,000/h</strong></td><td>REST API requests per repository with <code>GITHUB_TOKEN</code> (15,000 on Enterprise Cloud)</td></tr>
+        <tr><td><strong>500 KB</strong></td><td>Maximum workflow file size</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="renames-and-retired-syntax">Renames and retired syntax</h2>
+  <p>
+    The full table is on the <a href={`${href('actions-foundations')}#renames-and-retired-syntax`}>Foundations page</a>.
+    The five that cost the most marks:
+  </p>
+  <ul>
+    <li><strong>Starter workflows</strong> = <strong>workflow templates</strong>.</li>
+    <li><code>::set-output</code> and <code>::save-state</code> → <code>$GITHUB_OUTPUT</code> and <code>$GITHUB_STATE</code>; <code>::set-env</code> and <code>::add-path</code> → <code>$GITHUB_ENV</code> and <code>$GITHUB_PATH</code>.</li>
+    <li><code>upload-artifact@v3</code> → <code>@v7</code> (and <code>download-artifact@v8</code>); v4 and later are immutable per name.</li>
+    <li><code>runs.using: node16</code> / <code>node20</code> → <code>node24</code>.</li>
+    <li>Organisation "required workflows" → a <strong>ruleset</strong> with <strong>Require workflows to pass before merging</strong>.</li>
+  </ul>
+
+  <!-- ================================================================= -->
+  <h2 id="where-the-study-guide-and-the-docs-disagree">Where the study guide, Learn and the docs disagree</h2>
+  <p>
+    When the official sources disagree, these notes follow the live documentation. Here is every discrepancy found while
+    writing them, checked on {SITE.checked}, so neither version throws you.
+  </p>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Source says</th><th>The documentation and product say</th><th>What to remember</th></tr></thead>
+      <tbody>
+        <tr><td>Study guide: "starter workflows"</td><td>"Workflow templates", still stored in <code>actions/starter-workflows</code></td><td>Same feature, two names</td></tr>
+        <tr><td>Study guide: YAML anchors, aliases <strong>and merge <code>&lt;&lt;</code></strong></td><td>Docs describe only <code>&amp;</code> anchors and <code>*</code> aliases (supported since September 2025); community reports say <code>&lt;&lt;</code> is still rejected</td><td>Expand merged mappings when reading; do not rely on <code>&lt;&lt;</code> in a workflow</td></tr>
+        <tr><td>Study guide: "immutable actions rollout on hosted runners" and "immutable actions enforcement"</td><td>Immutable actions were removed from GitHub's roadmap on 11 December 2025. What shipped: immutable releases (October 2025), the SHA pinning policy (August 2025) and workflow lockfiles (GA 28 October 2026)</td><td>"Make the version unchangeable" = full SHA, lockfile or immutable release</td></tr>
+        <tr><td>Study guide: "Ubuntu 20.04 deprecation, Windows Server 2025 migration for windows-latest"</td><td>Both finished in 2025. The live change is <code>ubuntu-latest</code> moving to Ubuntu 26.04 (19 October – 19 November 2026)</td><td>The lesson is the same: <code>-latest</code> labels move; pin when you need reproducibility</td></tr>
+        <tr><td>Study guide: "required reviewers for unverified actions"</td><td>No single setting does this</td><td>Allowed-actions policy (verified creators plus patterns) and CODEOWNERS review of workflow changes</td></tr>
+        <tr><td>Study guide: retention policies "(logs, artifacts, workflow runs)" via REST</td><td>One <code>artifact-and-log-retention</code> setting per enterprise, organisation and repository; runs, logs and artifacts can also be deleted individually</td><td>Lower levels can only shorten the retention</td></tr>
+        <tr><td>Study guide: "Microsoft associate, expert and specialty certifications expire annually"</td><td>The GH-200 certification page: GitHub certifications are <strong>valid for two years</strong>; GitHub is moving to Microsoft's recertification process and extends certifications expiring before then by six months</td><td>Two years for GH-200</td></tr>
+        <tr><td>Study guide: "Get trained" links only the learning path's <strong>part 1</strong></td><td>Part 2 holds the custom actions, GitHub Packages and enterprise modules</td><td>Do both parts</td></tr>
+        <tr><td>Learn, <em>Create a custom GitHub action</em>: <code>runs.using: "node16"</code></td><td><code>node24</code>; Node 16 and Node 20 are gone from the runners</td><td>Any answer with <code>node16</code> or <code>node20</code> is outdated</td></tr>
+        <tr><td>Learn samples: <code>actions/checkout@v4</code>, <code>setup-node@v4</code>, <code>actions/cache@v4</code></td><td>Current majors are <code>checkout@v7</code>, <code>setup-node@v7</code>, <code>cache@v6</code>, <code>upload-artifact@v7</code>, <code>download-artifact@v8</code></td><td>Old majors still appear in questions; recognise them</td></tr>
+        <tr><td>Older material: <code>pull_request_target</code> runs the PR base branch's workflow; checkout of the PR head "just works"</td><td>Since 8 December 2025 it always runs the default branch's workflow; <code>checkout@v7</code> refuses fork PR code there without <code>allow-unsafe-pr-checkout</code></td><td>The safe answer never runs PR code with secrets</td></tr>
+        <tr><td>Older material: reusable workflows nest 4 deep, 20 per file; 10 dispatch inputs</td><td>10 levels and 50 workflows (November 2025); 25 inputs (December 2025)</td><td>Use the new numbers</td></tr>
+        <tr><td>Certification page: practice assessment</td><td>"Not currently available"</td><td>Use the exam sandbox and hands-on practice</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="commonly-mistaken-topics">Commonly mistaken topics</h2>
+  <p>Each one reads as a failed run and the run that fixed it.</p>
+
+  <Mistake topic="Jobs with needs">
+    <Fragment slot="trap"><p>A job with <code>needs: build</code> runs once <code>build</code> has finished.</p></Fragment>
+    <Fragment slot="fix"><p>It runs only if <code>build</code> <strong>succeeded</strong>; otherwise it is skipped, and the skip propagates. To run anyway, add <code>if: always()</code> (or <code>{"!cancelled()"}</code>) and check <code>needs.build.result</code>.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Conditions and the implicit success()">
+    <Fragment slot="trap"><p><code>if: github.ref == 'refs/heads/main'</code> on a notification step runs on main even after a failure.</p></Fragment>
+    <Fragment slot="fix"><p>Without a status function, <code>success() &amp;&amp;</code> is added, so it is skipped after a failure. Use <code>if: failure() &amp;&amp; …</code> or <code>always() &amp;&amp; …</code>.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Boolean dispatch inputs">
+    <Fragment slot="trap"><p><code>if: github.event.inputs.dry-run</code> is false when the box is unticked.</p></Fragment>
+    <Fragment slot="fix"><p><code>github.event.inputs</code> holds strings, and <code>'false'</code> is truthy. Use <code>inputs.dry-run</code>, which keeps the boolean type.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="GITHUB_ENV in the same step">
+    <Fragment slot="trap"><p>After <code>echo "X=1" &gt;&gt; "$GITHUB_ENV"</code>, <code>$X</code> is set in the same <code>run</code> script and in the next job.</p></Fragment>
+    <Fragment slot="fix"><p>It is set for the <strong>following steps of the same job</strong> only. Use a shell variable within the step, and a job output to cross jobs.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Secrets on fork pull requests">
+    <Fragment slot="trap"><p>A <code>pull_request</code> run from a fork can read repository secrets if the workflow references them.</p></Fragment>
+    <Fragment slot="fix"><p>Fork PR runs get <strong>no secrets</strong> and a <strong>read-only</strong> <code>GITHUB_TOKEN</code>. <code>pull_request_target</code> has secrets but runs the default branch's code — never check out and run the PR there.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Workflows triggering workflows">
+    <Fragment slot="trap"><p>A tag pushed with <code>GITHUB_TOKEN</code> starts the <code>on: push: tags</code> release workflow.</p></Fragment>
+    <Fragment slot="fix"><p>Events created with <code>GITHUB_TOKEN</code> start no new runs, except <code>workflow_dispatch</code> and <code>repository_dispatch</code>. Use a GitHub App token, or dispatch the workflow.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Cache versus artifact">
+    <Fragment slot="trap"><p>Use <code>actions/cache</code> to hand the build output from the build job to the deploy job.</p></Fragment>
+    <Fragment slot="fix"><p>Use an <strong>artifact</strong>: it belongs to the run and is guaranteed to be there. Caches are for dependencies, can be evicted at any time, and are scoped by branch.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Composite actions and secrets">
+    <Fragment slot="trap"><p>A composite action can read <code>{'${{ secrets.NPM_TOKEN }}'}</code> directly.</p></Fragment>
+    <Fragment slot="fix"><p>Composite actions have no <code>secrets</code> context. Declare an input and have the workflow pass the secret into it.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="What a reusable workflow inherits">
+    <Fragment slot="trap"><p>The called workflow sees the caller's <code>env</code> values and secrets automatically.</p></Fragment>
+    <Fragment slot="fix"><p>Neither. <code>env</code> is never propagated — use inputs — and secrets must be mapped or passed with <code>secrets: inherit</code>. The <code>github</code> context, by contrast, is the caller's.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Docker actions on any runner">
+    <Fragment slot="trap"><p>A Docker container action works on <code>windows-latest</code> and <code>macos-latest</code> because Docker runs there.</p></Fragment>
+    <Fragment slot="fix"><p>Docker container actions, service containers and job containers need a <strong>Linux</strong> runner. Write a JavaScript action for cross-platform use.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Reaching a service container">
+    <Fragment slot="trap"><p>A job running in <code>container: node:24</code> reaches its Postgres service at <code>localhost:5432</code>.</p></Fragment>
+    <Fragment slot="fix"><p>In a container job, use the <strong>service label</strong> as the hostname (<code>postgres:5432</code>). <code>localhost</code> plus a <code>ports</code> mapping is for jobs that run directly on the runner.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Environment secrets">
+    <Fragment slot="trap"><p>Environment secrets are available to every job in the workflow, like repository secrets.</p></Fragment>
+    <Fragment slot="fix"><p>Only a job that names the environment gets them, and only once its protection rules pass — they are read when that job starts.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Granting one permission">
+    <Fragment slot="trap"><p>Adding <code>permissions: pull-requests: write</code> keeps the token's other default scopes.</p></Fragment>
+    <Fragment slot="fix"><p>Once any scope is listed, every unlisted scope becomes <code>none</code>. List everything the job needs — typically <code>contents: read</code> as well.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Version tags are fixed">
+    <Fragment slot="trap"><p><code>uses: vendor/action@v1.4.2</code> always runs the same code.</p></Fragment>
+    <Fragment slot="fix"><p>Tags can be moved or recreated. Only a <strong>full commit SHA</strong> is fixed — or a commit recorded in a workflow lockfile, or a tag protected by an immutable release.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Scheduled runs">
+    <Fragment slot="trap"><p>A schedule runs on every branch that contains the workflow, at the runner's local time.</p></Fragment>
+    <Fragment slot="fix"><p>Schedules run on the <strong>latest commit of the default branch</strong>, in <strong>UTC</strong> unless the entry sets a <code>timezone</code>, and may be delayed under load.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Re-running a workflow">
+    <Fragment slot="trap"><p>Re-running picks up the latest commit and runs with the permissions of whoever clicked re-run.</p></Fragment>
+    <Fragment slot="fix"><p>A re-run uses the <strong>same commit and ref</strong>, and the privileges of the actor who triggered the <strong>original</strong> run.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="continue-on-error and step results">
+    <Fragment slot="trap"><p>After a failed step with <code>continue-on-error: true</code>, <code>steps.x.conclusion == 'failure'</code>.</p></Fragment>
+    <Fragment slot="fix"><p><code>outcome</code> is <code>failure</code>; <code>conclusion</code> is <code>success</code>. Test <code>outcome</code> to react to the real result.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="OIDC needs a stored credential">
+    <Fragment slot="trap"><p>OIDC to Azure still needs the client secret stored as a repository secret.</p></Fragment>
+    <Fragment slot="fix"><p>No secret at all: a federated credential trusts GitHub's token. The job needs <code>id-token: write</code>, and the IDs can live in variables.</p></Fragment>
+  </Mistake>
+
+  <Mistake topic="Stopping a workflow">
+    <Fragment slot="trap"><p>Delete the workflow file to pause a noisy schedule for a week.</p></Fragment>
+    <Fragment slot="fix"><p><strong>Disable</strong> it: the file and history stay, and enabling it again is one click. Deleting is a commit, and other branches with the file can still trigger it.</p></Fragment>
+  </Mistake>
+
+  <!-- ================================================================= -->
+  <h2 id="decision-trees">Decision trees</h2>
+  <Mermaid code={whichReuse} caption="Template, reusable workflow or composite action." />
+  <Mermaid code={whichCredential} caption="Which credential a workflow should use." />
+
+  <!-- ================================================================= -->
+  <h2 id="scenario-to-answer">Scenario → answer lookup</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>The scenario says…</th><th>Reach for</th></tr></thead>
+      <tbody>
+        <tr><td>"Run only when files under <code>docs/</code> change"</td><td><code>on: push: paths: ['docs/**']</code></td></tr>
+        <tr><td>"Let operators start a deploy and pick the target"</td><td><code>workflow_dispatch</code> with a <code>choice</code> or <code>environment</code> input</td></tr>
+        <tr><td>"An external system should start the workflow"</td><td><code>repository_dispatch</code> with an <code>event_type</code></td></tr>
+        <tr><td>"Run the same tests on three OSes and two runtimes"</td><td><code>strategy.matrix</code>; <code>fail-fast: false</code> to see every result</td></tr>
+        <tr><td>"Tests need a real database"</td><td><code>services:</code> with a health check</td></tr>
+        <tr><td>"Avoid repeating the same <code>env</code> block in one file"</td><td>A YAML anchor and alias</td></tr>
+        <tr><td>"Pass a version from one job to the next"</td><td><code>$GITHUB_OUTPUT</code> → job <code>outputs</code> → <code>needs.&lt;job&gt;.outputs</code></td></tr>
+        <tr><td>"Show test results on the run page"</td><td><code>$GITHUB_STEP_SUMMARY</code></td></tr>
+        <tr><td>"A new push should cancel the PR's running build"</td><td><code>concurrency</code> with <code>cancel-in-progress: true</code></td></tr>
+        <tr><td>"Deployments must run one at a time, none dropped"</td><td><code>concurrency</code> with <code>queue: max</code></td></tr>
+        <tr><td>"Production needs a human approval"</td><td>Environment with required reviewers</td></tr>
+        <tr><td>"Why was this step skipped?"</td><td>Re-run with debug logging; read the <code>##[debug]</code> condition trace</td></tr>
+        <tr><td>"Retry only the flaky Windows leg"</td><td>Re-run that matrix job</td></tr>
+        <tr><td>"Every team's pipeline must follow one central definition"</td><td>Reusable workflow, plus a ruleset requiring it</td></tr>
+        <tr><td>"Bundle three setup steps used in many jobs"</td><td>Composite action</td></tr>
+        <tr><td>"Share a private action with the rest of the organisation"</td><td>The action repository's Actions <strong>Access</strong> setting</td></tr>
+        <tr><td>"Only allow GitHub and verified-creator actions"</td><td>Allowed-actions policy at organisation or enterprise level</td></tr>
+        <tr><td>"Stop one compromised action everywhere, now"</td><td>A <code>!owner/repo@*</code> blocklist pattern</td></tr>
+        <tr><td>"Jobs fail behind the organisation's IP allow list"</td><td>Larger runners with static IPs, or self-hosted runners</td></tr>
+        <tr><td>"Keep production runners for the deploy workflow only"</td><td>Runner group restricted to selected workflows</td></tr>
+        <tr><td>"Clean machine for every job on our own infrastructure"</td><td>Ephemeral self-hosted runners, autoscaled with ARC</td></tr>
+        <tr><td>"Which Python versions are preinstalled?"</td><td>The image README in <code>actions/runner-images</code>, linked from <strong>Set up job</strong></td></tr>
+        <tr><td>"Rotate a secret from a script"</td><td>Fetch the public key, encrypt, <code>PUT …/actions/secrets/{'{name}'}</code> — or <code>gh secret set</code></td></tr>
+        <tr><td>"Issue titles end up in a <code>run:</code> script"</td><td>Pass them through <code>env:</code> and quote them</td></tr>
+        <tr><td>"Deploy to the cloud without long-lived keys"</td><td>OIDC: <code>id-token: write</code> and a federated credential</td></tr>
+        <tr><td>"Prove a binary came from our pipeline"</td><td><code>actions/attest</code>, then <code>gh attestation verify</code> before deploy</td></tr>
+        <tr><td>"Make sure the action code never changes under us"</td><td>Full-SHA pins (enforced by policy) or a workflow lockfile</td></tr>
+        <tr><td>"Artifacts are filling the storage quota"</td><td>Shorter <code>retention-days</code> and a lower retention policy via the API</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="exam-day-caveats">Exam-day caveats</h2>
+  <Callout type="exam" title="Read the YAML before the question">
+    <p>
+      Many items are a workflow followed by "what happens?". Read <code>on:</code>, <code>permissions</code> and every
+      <code>needs</code> and <code>if</code> before you read the answer options — the trap is usually a filter that does
+      not match, a skipped dependency or a missing scope.
+    </p>
+  </Callout>
+  <Callout type="warn" title="Watch for the old syntax in the options">
+    <p>
+      <code>::set-output</code>, <code>@v3</code> artifact actions, <code>node16</code> and
+      <code>ubuntu-20.04</code> make an option wrong today, however tidy it looks.
+    </p>
+  </Callout>
+  <Callout type="tip" title="Prefer the enforceable answer">
+    <p>
+      When two options both "work", the exam tends to prefer the one that is enforced by the platform — a policy, a
+      protection rule, a permission, a pin — over one that relies on people remembering to do the right thing.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="pre-exam-checklist">Pre-exam checklist</h2>
+  <ul class="checklist">
+    <li>I can name the event, filters and branch behind any <code>on:</code> block, including <code>schedule</code>, <code>workflow_dispatch</code> and <code>pull_request_target</code>.</li>
+    <li>I can expand a matrix with <code>include</code> and <code>exclude</code>, and an anchored file, in my head.</li>
+    <li>I know which contexts are available in a job <code>if</code>, <code>runs-on</code> and a step <code>if</code>.</li>
+    <li>I can move a value step → step, job → job and reusable workflow → caller.</li>
+    <li>I can tell a cache from an artifact, and know their scope, retention and limits.</li>
+    <li>I can write <code>action.yml</code> for JavaScript, Docker and composite actions, and know where each runs.</li>
+    <li>I know the Marketplace publishing requirements and why consumers pin to SHAs.</li>
+    <li>I can set allowed-actions, SHA pinning, fork PR and token-permission policies, and know they only tighten downwards.</li>
+    <li>I can register a self-hosted runner, put it in a group and target it with labels.</li>
+    <li>I know secret and variable scopes, precedence and limits, and how the API encrypts secrets.</li>
+    <li>I can spot script injection and fix it with <code>env:</code>, and explain why <code>pull_request_target</code> is dangerous.</li>
+    <li>I can configure OIDC to a cloud provider and read a subject claim.</li>
+    <li>I can attest an artifact and verify it before deployment.</li>
+    <li>I have tried the <a href="https://ghcertdemo.starttest.com/" target="_blank" rel="noopener">exam sandbox</a>.</li>
+  </ul>
+</NoteLayout>

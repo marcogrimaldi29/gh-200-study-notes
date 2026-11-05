@@ -1,0 +1,1378 @@
+/* =====================================================================
+   GH-200 Study Notes — GitHub look and feel, with an Actions signature
+   Author: Marco Grimaldi (marcogrimaldi29.com)
+
+   The visual language is GitHub's own, and deliberately the same family as
+   the GH-600, GH-300 and GH-900 study notes: Primer colours (the dark theme
+   uses the sister sites' exact tokens), the system font stack, 6px corners,
+   1px borders, Octicons, Labels and Counters, Markdown-style tables and alerts.
+
+   GH-200's signature comes from the Actions tab: blue with the passing-check
+   green (hero gradient and background clouds), run-status icons, a run-summary
+   strip under each title, file headers on workflow files, `${{ }}` expressions
+   marked in YAML, log panels, job-step procedures and run-graph diagrams. All
+   of it lives in the "Actions signature" block near the end of this file.
+
+   Colour tokens are declared once on :root (light) and redefined on
+   html[data-theme="dark"], so every component is written against the
+   semantic names and follows the theme switcher.
+   ===================================================================== */
+
+:root {
+  /* --- Primer light ------------------------------------------------- */
+  --bg: #ffffff;            /* canvas                                  */
+  --surface: #f6f8fa;       /* panels, cards, code — bg-secondary      */
+  --surface-2: #eff2f5;     /* table headers, hover — bg-tertiary      */
+  --surface-3: #e6eaef;     /* chips, counters, tracks — bg-card       */
+  --border: #d0d7de;
+  --border-muted: #d8dee4;
+  --text: #1f2328;
+  --text-soft: #59636e;
+  --text-muted: #6e7781;
+
+  --accent-blue: #0969da;
+  --accent-green: #1a7f37;
+  --accent-purple: #8250df;
+  --accent-orange: #9a6700;
+  --accent-red: #cf222e;
+  --accent-cyan: #1b7c83;
+
+  --header-bg: rgba(255, 255, 255, .85);
+  --code-bg: var(--surface);
+  --code-inline-bg: rgba(175, 184, 193, .2);
+  --shadow: 0 3px 6px rgba(140, 149, 159, .15);
+  --shadow-overlay: 0 8px 24px rgba(140, 149, 159, .2);
+  --backdrop: rgba(31, 35, 40, .45);
+  --cloud-opacity: .08;
+  --rain-opacity: .04;
+
+  /* --- Per-section accents (mirrors src/data/site.ts) ---------------- */
+  /* Each page takes one accent from GitHub's set; blue stays the primary. */
+  --s0: var(--accent-blue);    /* Home & Foundations             */
+  --s1: var(--accent-green);   /* 1 Author and manage workflows  */
+  --s2: var(--accent-cyan);    /* 2 Consume and troubleshoot     */
+  --s3: var(--accent-purple);  /* 3 Author and maintain actions  */
+  --s4: var(--accent-orange);  /* 4 Manage for the enterprise    */
+  --s5: var(--accent-red);     /* 5 Secure and optimize          */
+  --s6: var(--accent-blue);    /* Syntax reference               */
+  --s7: var(--accent-orange);  /* Exam tips                      */
+
+  /* --- Shape and rhythm ---------------------------------------------- */
+  --radius: 6px;              /* GitHub's everywhere radius              */
+  --radius-overlay: 12px;     /* dialogs and floating panels, as Primer  */
+  --maxw: 1400px;
+  --header-h: 60px;
+  --sidebar-w: 262px;
+  --sidebar-w-collapsed: 56px;
+  --aside-w: 232px;
+  /* Inset of the navigation drawer from the viewport edges, which is what lets
+     its rounded corners read as the same card as the docked rail. */
+  --drawer-gap: 12px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --mono: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+
+  /* GitHub-quick interactions: one shared timing for every hover. */
+  --fast: .15s;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+}
+
+html[data-theme="dark"] {
+  /* --- Primer dark: exactly the GH-300 / GH-900 tokens ---------------- */
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #1c2128;
+  --surface-3: #21262d;
+  --border: #30363d;
+  --border-muted: #21262d;
+  --text: #e6edf3;
+  --text-soft: #8b949e;
+  --text-muted: #6e7681;
+
+  --accent-blue: #58a6ff;
+  --accent-green: #3fb950;
+  --accent-purple: #bc8cff;
+  --accent-orange: #d29922;
+  --accent-red: #f85149;
+  --accent-cyan: #39d2c0;
+
+  --header-bg: rgba(13, 17, 23, .85);
+  --code-inline-bg: var(--surface-3);
+  --shadow: 0 3px 6px rgba(0, 0, 0, .4);
+  --shadow-overlay: 0 8px 24px rgba(1, 4, 9, .75);
+  --backdrop: rgba(1, 4, 9, .6);
+  --cloud-opacity: .06;
+  --rain-opacity: .03;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(var(--header-h) + 18px);
+  scrollbar-color: var(--border) var(--bg);
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+a { color: var(--accent-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; }
+
+/* GitHub's focus ring: a solid accent-blue outline, always visible on keyboard focus. */
+:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Skip link for keyboard and screen-reader users. */
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 300;
+  background: var(--surface); color: var(--text); font-weight: 600;
+  padding: 10px 16px; border: 2px solid var(--accent-blue); border-radius: 0 0 var(--radius) 0;
+}
+.skip-link:focus { left: 0; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+
+/* Octicons inherit the text colour, like on GitHub. */
+.octicon { fill: currentColor; vertical-align: text-bottom; flex: none; display: inline-block; }
+
+/* Scrollbars in the Primer greys. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ===================== Background: clouds and code rain ===================== */
+/* The sister sites' signature: slow, blurred clouds and a barely visible rain
+   of tokens from the exam's vocabulary, both far behind the content. GH-200's
+   clouds drift in blue, the passing-check green and cyan. */
+.bg-animation, .code-rain {
+  position: fixed; inset: 0; z-index: -1;
+  overflow: hidden; pointer-events: none;
+}
+.bg-animation .cloud {
+  position: absolute; border-radius: 50%;
+  filter: blur(80px); opacity: var(--cloud-opacity);
+  animation: float-cloud 25s ease-in-out infinite alternate;
+}
+.bg-animation .cloud:nth-child(1) { width: 500px; height: 300px; background: var(--accent-blue); top: 10%; left: -5%; animation-duration: 30s; }
+.bg-animation .cloud:nth-child(2) { width: 400px; height: 250px; background: var(--accent-green); top: 50%; right: -5%; animation-duration: 22s; animation-delay: -5s; }
+.bg-animation .cloud:nth-child(3) { width: 350px; height: 200px; background: var(--accent-cyan); bottom: 10%; left: 30%; animation-duration: 28s; animation-delay: -10s; }
+@keyframes float-cloud {
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(20px, -30px) scale(1.1); }
+  100% { transform: translate(-15px, 10px) scale(.95); }
+}
+
+.code-rain {
+  opacity: var(--rain-opacity);
+  font-family: var(--mono); font-size: 14px;
+  color: var(--accent-green);
+}
+.code-rain .rain-col {
+  position: absolute; top: 0;
+  writing-mode: vertical-rl; white-space: nowrap;
+  animation: code-rain linear infinite;
+}
+@keyframes code-rain {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(100vh); }
+}
+
+/* ===================== Header ===================== */
+.site-header {
+  position: sticky; top: 0; z-index: 100;
+  height: var(--header-h);
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 24px;
+  background: var(--header-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+/* The wordmark never shrinks, wraps or clips: everything else in the bar gives
+   way first. flex: none stops the flex algorithm from quietly squeezing it. */
+.brand {
+  display: flex; align-items: center; gap: 12px; flex: none;
+  font-size: 16px; color: var(--text); white-space: nowrap;
+}
+.brand img { width: 32px; height: 32px; border-radius: var(--radius); object-fit: contain; flex: none; }
+.brand:hover { text-decoration: none; }
+.brand .brand-lead { font-weight: 600; color: var(--text); }
+.brand .brand-rest { font-weight: 400; color: var(--text-soft); }
+
+.header-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* GitHub's bordered icon button. */
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-soft); cursor: pointer;
+  transition: background var(--fast), color var(--fast), border-color var(--fast), transform var(--fast);
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--text-muted); }
+
+/* The Star link, styled as GitHub's own Star button. */
+.ghub-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); font-size: 13px; font-weight: 500; white-space: nowrap;
+  transition: background var(--fast), border-color var(--fast);
+}
+.ghub-link:hover { background: var(--surface-2); border-color: var(--accent-orange); text-decoration: none; }
+.ghub-link .octicon { width: 16px; height: 16px; }
+.ghub-link .ghub-star { font-size: 13px; line-height: 1; }
+
+/* Shown only once the rail turns into a drawer. */
+.sidebar-open { display: none; }
+
+/* ===================== Search (command palette) ===================== */
+.search-modal {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(70vh, 620px);
+  margin: 0 auto;
+  margin-top: clamp(40px, 10vh, 110px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-overlay);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+}
+.search-modal::backdrop { background: var(--backdrop); }
+.search-modal[open] { animation: sm-in .15s var(--ease); }
+@keyframes sm-in {
+  from { opacity: 0; transform: translateY(-6px) scale(.99); }
+  to   { opacity: 1; transform: none; }
+}
+
+.sm-inner { display: flex; flex-direction: column; max-height: inherit; }
+.sm-field {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.sm-icon { color: var(--text-muted); }
+.sm-input {
+  flex: 1; min-width: 0; border: 0; background: none; outline: none;
+  font: inherit; font-size: 15px; color: var(--text);
+}
+.sm-input::placeholder { color: var(--text-muted); }
+.sm-input::-webkit-search-cancel-button { display: none; }
+.sm-close {
+  flex: none; font-family: var(--mono); font-size: 11px;
+  color: var(--text-soft); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 7px; cursor: pointer;
+  transition: background var(--fast), color var(--fast);
+}
+.sm-close:hover { background: var(--surface-3); color: var(--text); }
+
+.sm-status-row { display: flex; align-items: center; gap: 6px; padding: 10px 16px 2px; min-height: 30px; }
+.sm-status { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-soft); }
+/* The amber in-progress ring shows only while the index is being built. */
+.sm-status-row .sm-ring { display: none; }
+.search-modal.is-building .sm-status-row .sm-ring { display: inline-flex; }
+.sm-snippet-code { font-family: var(--mono); font-size: 12px; }
+.sm-results { list-style: none; margin: 0; padding: 6px 8px 8px; overflow-y: auto; scrollbar-width: thin; flex: 1; }
+.sm-hit + .sm-hit { margin-top: 2px; }
+.sm-hit a {
+  display: block; padding: 8px 12px; border-radius: var(--radius);
+  border-left: 2px solid transparent; color: var(--text);
+  transition: background var(--fast), border-color var(--fast);
+}
+.sm-hit a:hover { text-decoration: none; background: var(--surface-2); }
+.sm-hit.active a {
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  border-left-color: var(--accent-blue);
+}
+.sm-crumb { display: block; font-size: 12px; color: var(--text-soft); margin-bottom: 1px; }
+.sm-title { display: block; font-weight: 600; font-size: 14px; line-height: 1.4; }
+.sm-snippet {
+  margin-top: 2px; font-size: 13px; line-height: 1.5; color: var(--text-soft);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.sm-results mark {
+  background: color-mix(in srgb, var(--accent-orange) 30%, transparent);
+  color: inherit; border-radius: 3px; padding: 0 1px;
+}
+.sm-foot {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  padding: 8px 16px; border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--text-soft);
+}
+kbd, .sm-foot kbd {
+  font-family: var(--mono); font-size: 11px; padding: 1px 5px; margin-right: 3px;
+  border: 1px solid var(--border); border-bottom-color: var(--text-muted);
+  border-radius: var(--radius); background: var(--surface-2); color: var(--text);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+@media (max-width: 560px) {
+  .search-modal { margin-top: 12px; max-height: calc(100vh - 24px); }
+  .sm-foot { display: none; }
+}
+
+/* ===================== Theme toggle (sunrise to sun) ===================== */
+/* The mark is the site's sunrise logo: a half disc on the horizon with three
+   rays. Switching to light mode lifts the disc clear of the horizon, unclips
+   it into a full circle and fans out the remaining five rays. The sunrise
+   takes the logo's teal; the full sun is GitHub's attention gold. */
+.theme-toggle .sun-icon { width: 20px; height: 20px; display: block; overflow: visible; }
+.theme-toggle .sun-icon .disc {
+  fill: var(--accent-cyan);
+  cy: 16.4px;
+  transition: cy .45s var(--ease), fill .3s var(--ease);
+}
+.theme-toggle .sun-icon .clip-rect { height: 16.4px; transition: height .45s var(--ease); }
+/* In the sunrise state the disc sits low on the horizon, so the rays are pulled
+   in tight around the dome the way they are in the brand mark. Releasing this
+   transform lets them fan out to full radius for the sun. */
+.theme-toggle .sun-icon .rays {
+  /* Measured against site-mark-no-bg.svg: there the rays start at ~1.26× and
+     end at ~1.6× the dome's radius. Scaling the full-sun rays by .864 about
+     the icon centre and moving that centre down onto the horizon (12 → 16.4)
+     reproduces those ratios around the 5.1-unit dome. */
+  transform: translateY(4.4px) scale(.864);
+  transform-origin: 12px 12px;
+  transition: transform .45s var(--ease);
+}
+.theme-toggle .sun-icon .ray {
+  stroke: var(--accent-cyan); stroke-width: 2; stroke-linecap: round;
+  transform-origin: 12px 12px;
+  transition: opacity .35s var(--ease), transform .45s var(--ease), stroke .3s var(--ease);
+}
+.theme-toggle .sun-icon .ray.lower { opacity: 0; transform: scale(.35); }
+.theme-toggle .sun-icon .horizon {
+  stroke: var(--accent-cyan); stroke-width: 2.1; stroke-linecap: round;
+  opacity: 1; transition: opacity .3s var(--ease), stroke .3s var(--ease);
+}
+/* Light theme renders the full sun. */
+html[data-theme="light"] .theme-toggle .sun-icon .rays { transform: none; }
+html[data-theme="light"] .theme-toggle .sun-icon .disc { cy: 12px; fill: var(--accent-orange); }
+html[data-theme="light"] .theme-toggle .sun-icon .clip-rect { height: 24px; }
+html[data-theme="light"] .theme-toggle .sun-icon .ray { stroke: var(--accent-orange); }
+html[data-theme="light"] .theme-toggle .sun-icon .ray.lower { opacity: 1; transform: scale(1); }
+html[data-theme="light"] .theme-toggle .sun-icon .horizon { opacity: 0; }
+/* Hover previews the click rather than spinning the whole mark, which tilted
+   the horizon and swung the sunrise off-centre. Each motion is symmetric about
+   the vertical axis, so the mark stays in the middle of the button:
+   - sunrise: the disc climbs a little above the horizon and the rays follow it,
+     easing slightly outwards;
+   - full sun: only the rays turn, an eighth of a turn about the disc centre,
+     which lands them back on the same eight-ray pattern.
+   Hover-capable pointers only, so a tap on a phone does not leave it stuck. */
+@media (hover: hover) {
+  html:not([data-theme="light"]) .theme-toggle:hover .sun-icon .disc { cy: 15.2px; }
+  html:not([data-theme="light"]) .theme-toggle:hover .sun-icon .rays { transform: translateY(3.2px) scale(.9); }
+  html[data-theme="light"] .theme-toggle:hover .sun-icon .rays { transform: rotate(45deg); }
+}
+
+/* ===================== Layout ===================== */
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  gap: 36px;
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 28px 26px 80px;
+  transition: grid-template-columns .28s var(--ease), gap .28s var(--ease);
+}
+.layout[data-sidebar="collapsed"] { grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr); gap: 26px; }
+
+/* Prose and the section outline, side by side. */
+.page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--aside-w);
+  grid-template-areas:
+    "head aside"
+    "main aside"
+    "pager aside";
+  align-items: start;
+  gap: 0 34px;
+  min-width: 0;
+}
+/* The home page reuses the rail and the same column, but flows as a block: it
+   leads with a hero rather than a page header, and carries no section outline. */
+.page-home { display: block; }
+
+.page-head { grid-area: head; }
+.on-this-page { grid-area: aside; }
+.content { grid-area: main; }
+.pager { grid-area: pager; }
+
+/* The outline is built from the rendered headings, so without JavaScript it
+   stays hidden — in which case the right column should not reserve space. */
+.page:has(.on-this-page[hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "head" "main" "pager";
+}
+
+/* ===================== Foldable sidebar ===================== */
+/* The GH-300 / GH-900 sidebar — uppercase group headings, an Octicon and a
+   name per entry, a 2px accent-blue bar on the active page and the weighting
+   in a Counter — kept as a bordered card so it can fold and become a drawer. */
+.sidebar {
+  position: sticky; top: calc(var(--header-h) + 20px);
+  align-self: start;
+  max-height: calc(100vh - var(--header-h) - 36px);
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.sb-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 10px 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.sb-head .sb-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  flex: 1; white-space: nowrap;
+}
+.sb-fold, .sb-close {
+  width: 28px; height: 28px; flex: none; border-radius: var(--radius);
+  border: 1px solid transparent; background: transparent; color: var(--text-soft);
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  transition: background var(--fast), color var(--fast);
+}
+.sb-fold:hover, .sb-close:hover { background: var(--surface-2); color: var(--text); }
+.sb-fold .octicon { transition: transform .28s var(--ease); }
+.layout[data-sidebar="collapsed"] .sb-fold .octicon { transform: rotate(180deg); }
+.sb-close { display: none; }
+
+/* The list is sized to fit without scrolling on realistic laptop viewports —
+   a maximised window on a 1080p screen at 150% scaling is only ~620 CSS px
+   tall, where a few pixels of overflow would put up a scrollbar that shows
+   almost nothing. Scrolling stays available for genuinely short windows. */
+.sb-scroll { overflow-y: auto; padding: 8px 0 10px; scrollbar-width: thin; }
+.sb-group + .sb-group { margin-top: 6px; }
+.sb-group-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
+  line-height: 1.5; color: var(--text-muted); padding: 6px 16px 3px;
+}
+.sb-link {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 14px 5px 14px; line-height: 1.4;
+  font-size: 14px; color: var(--text-soft);
+  border-left: 2px solid transparent;
+  transition: background var(--fast), color var(--fast), border-color var(--fast);
+}
+.sb-link:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.sb-link[aria-current="page"] {
+  color: var(--text); font-weight: 500;
+  border-left-color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+}
+.sb-link .octicon { opacity: .75; }
+.sb-link[aria-current="page"] .octicon { opacity: 1; color: var(--accent-blue); }
+.sb-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Collapsed rail: Octicons only, labels hidden but still reachable by name.
+   Scoped to the widths where the rail really is a panel. Below that it is a
+   drawer, and a persisted "collapsed" preference must not leak into it: an
+   icon-only column inside a 320px drawer is unreadable and offers no way back. */
+@media (min-width: 981px) {
+  .layout[data-sidebar="collapsed"] .sb-head .sb-title,
+  .layout[data-sidebar="collapsed"] .sb-group-label,
+  .layout[data-sidebar="collapsed"] .sb-link .counter { display: none; }
+  /* Visually hidden rather than display: none, so each icon-only link keeps
+     its accessible name. */
+  .layout[data-sidebar="collapsed"] .sb-text {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  }
+  .layout[data-sidebar="collapsed"] .sb-head { padding: 10px 6px; justify-content: center; }
+  .layout[data-sidebar="collapsed"] .sb-scroll { padding: 8px 0; }
+  .layout[data-sidebar="collapsed"] .sb-link { justify-content: center; padding: 9px 4px; }
+  .layout[data-sidebar="collapsed"] .sb-group + .sb-group {
+    margin-top: 6px; border-top: 1px solid var(--border); padding-top: 6px;
+  }
+}
+
+.sb-backdrop { display: none; }
+
+/* ===================== Labels and Counters ===================== */
+/* GitHub Labels: rounded pills on a 15% tint of their colour. */
+.label {
+  --label: var(--accent-blue);
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; font-weight: 500; line-height: 18px;
+  padding: 1px 9px; border-radius: 2em; white-space: nowrap;
+  color: var(--label);
+  background: color-mix(in srgb, var(--label) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--label) 30%, transparent);
+}
+.label .octicon { width: 12px; height: 12px; }
+.label.l-green  { --label: var(--accent-green); }
+.label.l-purple { --label: var(--accent-purple); }
+.label.l-orange { --label: var(--accent-orange); }
+.label.l-red    { --label: var(--accent-red); }
+.label.l-cyan   { --label: var(--accent-cyan); }
+.label.l-accent { --label: var(--accent, var(--accent-blue)); }
+.label.l-neutral { color: var(--text-soft); background: var(--surface-2); border-color: var(--border); }
+
+/* GitHub Counters: small neutral pills. */
+.counter {
+  display: inline-block; flex: none;
+  font-size: 11px; font-weight: 500; line-height: 18px;
+  padding: 0 7px; border-radius: 2em;
+  background: var(--surface-3); color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===================== On this page (right aside) ===================== */
+.on-this-page[hidden] { display: none; }
+.on-this-page {
+  position: sticky;
+  top: calc(var(--header-h) + 28px);
+  align-self: start;
+  max-height: calc(100vh - var(--header-h) - 56px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding: 4px 0 8px;
+}
+.otp > summary {
+  display: flex; align-items: center; gap: 8px;
+  list-style: none; cursor: default; pointer-events: none;
+  font-size: 12px; font-weight: 600; color: var(--text);
+  padding-bottom: 10px;
+}
+.otp > summary::-webkit-details-marker { display: none; }
+.otp-chevron { display: none; }
+
+.otp-body { position: relative; }
+.otp-list { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 1px solid var(--border); }
+.otp-list li { margin: 0; }
+.otp-list a {
+  display: block; padding: 4px 4px; font-size: 13px; line-height: 1.45;
+  color: var(--text-soft); transition: color var(--fast);
+}
+.otp-list a:hover { color: var(--text); text-decoration: none; }
+.otp-list a.otp-h3 { padding-left: 14px; font-size: 12.5px; }
+.otp-list a.active { color: var(--accent-blue); font-weight: 500; }
+
+/* The marker slides between entries rather than snapping, which is what makes
+   the outline feel like one continuous position indicator. */
+.otp-marker {
+  position: absolute; left: -1px; top: 0;
+  width: 2px; height: 20px; border-radius: 2px;
+  background: var(--accent-blue);
+  opacity: 0;
+  transition: top .25s cubic-bezier(0, 1, .5, 1), opacity .25s var(--ease);
+}
+
+/* ===================== Hero (home) ===================== */
+.hero { text-align: center; padding: 36px 0 28px; }
+.hero-title {
+  display: flex; align-items: center; justify-content: center;
+  gap: 16px; margin-bottom: 16px;
+}
+.hero-logo {
+  width: 56px; height: 56px; flex: none;
+  filter: drop-shadow(0 4px 12px color-mix(in srgb, var(--accent-blue) 40%, transparent));
+}
+.hero h1 {
+  margin: 0; padding: 0; border: 0;
+  font-size: 40px; line-height: 1.2; font-weight: 700;
+  /* GH-200 signature: Actions blue into the passing-check green. Both ends
+     clear AA against the canvas in each theme. */
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+.hero .lead { max-width: 660px; margin: 0 auto 20px; }
+.hero-labels { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
+
+/* The disclaimer banner: a subtle orange tint, as on the sister sites. */
+.disclaimer {
+  background: color-mix(in srgb, var(--accent-orange) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-orange) 25%, transparent);
+  border-radius: var(--radius);
+  padding: 12px 18px; margin: 20px 0 8px;
+  font-size: 14px; color: var(--text-soft);
+}
+.disclaimer strong:first-child { color: var(--accent-orange); }
+
+/* ===================== Page header ===================== */
+.breadcrumb {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  font-size: 13px; color: var(--text-muted); margin-bottom: 14px;
+}
+.breadcrumb a { color: var(--text-soft); }
+.breadcrumb a:hover { color: var(--accent-blue); }
+.breadcrumb .sep { color: var(--text-muted); }
+.breadcrumb [aria-current] { color: var(--text); }
+
+.page-head h1 {
+  font-size: 32px; font-weight: 600; line-height: 1.25;
+  margin: 0 0 12px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.page-head .lead { margin: 0 0 16px; }
+
+/* ===================== Content typography ===================== */
+/* Headings read like a rendered README: H1/H2 with a thin rule, H3 in blue. */
+.content { min-width: 0; }
+.content h2 {
+  font-size: 24px; font-weight: 600; line-height: 1.3;
+  margin: 40px 0 16px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.content h2 .num { color: var(--accent, var(--accent-blue)); font-family: var(--mono); font-weight: 600; margin-right: 10px; }
+.content h3 { font-size: 20px; font-weight: 600; margin: 28px 0 12px; color: var(--accent-blue); }
+.content h4 { font-size: 16px; font-weight: 600; margin: 20px 0 8px; color: var(--text); }
+.content p { margin: 0 0 16px; }
+.content p, .content li { color: var(--text-soft); }
+.content strong { color: var(--text); font-weight: 600; }
+.content ul, .content ol { padding-left: 24px; margin: 0 0 16px; }
+.content li { margin: 6px 0; }
+.content li::marker { color: var(--text-muted); }
+.content li > ul, .content li > ol { margin: 6px 0 0; }
+
+/* Inline code on a subtle chip; cyan in dark mode, as on the sister sites. */
+code {
+  font-family: var(--mono); font-size: 85%;
+  background: var(--code-inline-bg); padding: .15em .4em; border-radius: 4px;
+  color: var(--accent-cyan); word-break: break-word;
+}
+html[data-theme="light"] code { color: var(--text); }
+pre code { background: none; padding: 0; color: inherit; font-size: inherit; word-break: normal; }
+
+.lead { font-size: 18px; line-height: 1.7; color: var(--text-soft); }
+
+/* ===================== Panels and cards ===================== */
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 20px; margin: 20px 0;
+}
+.card > :first-child { margin-top: 0; }
+.card > :last-child { margin-bottom: 0; }
+.card ul { margin-bottom: 0; }
+
+.card-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px; margin: 20px 0;
+}
+
+/* Skill cards, as on the GH-300 / GH-900 home pages. */
+.skill-card {
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px; color: inherit;
+  transition: border-color .2s var(--ease), transform .2s var(--ease), box-shadow .2s var(--ease);
+}
+.skill-card:hover {
+  border-color: var(--accent-blue); transform: translateY(-2px);
+  box-shadow: var(--shadow); text-decoration: none;
+}
+.card-icon {
+  width: 40px; height: 40px; border-radius: var(--radius); margin-bottom: 12px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent, var(--accent-blue));
+  background: color-mix(in srgb, var(--accent, var(--accent-blue)) 15%, transparent);
+}
+.skill-card h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; line-height: 1.35; color: var(--text); }
+.skill-card p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--text-soft); flex: 1; }
+.card-weight { margin-top: 12px; font-family: var(--mono); font-size: 12px; color: var(--text-soft); }
+
+/* Thin weighting bar with a monospace label. */
+.weight-bar { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.weight-track { flex: 1; height: 8px; background: var(--surface-3); border-radius: 4px; overflow: hidden; }
+.weight-fill {
+  display: block; height: 100%; width: 0; border-radius: 4px;
+  background: var(--accent, var(--accent-blue));
+  transition: width .6s ease;
+}
+.weight-label { font-family: var(--mono); font-size: 12px; color: var(--text-soft); min-width: 52px; text-align: right; }
+.wr-note { margin: 8px 0 0; font-size: 13px; color: var(--text-soft); }
+
+/* ===================== Callouts as GitHub Markdown alerts ===================== */
+.callout {
+  --alert: var(--accent-blue);
+  margin: 20px 0; padding: 10px 16px;
+  border-left: 3px solid var(--alert); border-radius: 0 var(--radius) var(--radius) 0;
+  background: color-mix(in srgb, var(--alert) 7%, transparent);
+  color: var(--text-soft);
+}
+.callout-note      { --alert: var(--accent-blue); }
+.callout-tip       { --alert: var(--accent-green); }
+.callout-important { --alert: var(--accent-purple); }
+.callout-warning   { --alert: var(--accent-orange); }
+.callout-caution   { --alert: var(--accent-red); }
+.callout .callout-title {
+  display: flex; align-items: center; gap: 8px;
+  margin: 2px 0 6px; font-weight: 600; color: var(--alert);
+}
+.content .callout p, .callout p { color: var(--text-soft); margin: 0 0 8px; }
+.callout > :last-child { margin-bottom: 2px; }
+
+/* ===================== Tables as rendered Markdown tables ===================== */
+.table-wrap { margin: 16px 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 540px; }
+table.tbl th, table.tbl td {
+  padding: 8px 13px; text-align: left; vertical-align: top;
+  border: 1px solid var(--border);
+}
+table.tbl th { background: var(--surface-2); font-weight: 600; color: var(--text); }
+table.tbl td { color: var(--text-soft); }
+table.tbl td:first-child { color: var(--text); }
+table.tbl td strong { color: var(--text); }
+table.tbl tbody tr { transition: background var(--fast); }
+table.tbl tbody tr:hover td { background: color-mix(in srgb, var(--accent-blue) 4%, transparent); }
+
+/* ===================== Figures and diagrams ===================== */
+.figure {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px; margin: 20px 0; overflow-x: auto;
+}
+/* Before Mermaid runs, the definition is shown as muted monospace so the
+   figure degrades to something readable rather than an empty frame. */
+.figure pre.mermaid {
+  margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  color: var(--text-soft); white-space: pre-wrap; text-align: left; opacity: .7;
+  background: none; border: 0; padding: 0;
+}
+.figure pre.mermaid[data-processed] {
+  font-family: var(--font); font-size: inherit; opacity: 1;
+  display: block; white-space: normal;
+}
+/* Centred with auto margins rather than flex, so a diagram wider than its
+   figure (see the min-width set in Mermaid.astro) overflows to the right and
+   stays fully reachable by horizontal scrolling. */
+.figure pre.mermaid[data-processed] svg { display: block; margin: 0 auto; }
+.figure figcaption { font-size: 13px; color: var(--text-soft); margin-top: 12px; text-align: center; }
+.figure svg { max-width: 100%; height: auto; }
+
+/* ===================== Code ===================== */
+.code-block { position: relative; margin: 16px 0; }
+.code-block .lang {
+  position: absolute; top: 8px; right: 10px; z-index: 1;
+  font-family: var(--mono); font-size: 11px; line-height: 18px;
+  color: var(--text-soft); background: var(--surface-2);
+  border: 1px solid var(--border); padding: 0 8px; border-radius: 2em;
+}
+.code-block pre {
+  margin: 0; padding: 16px; border-radius: var(--radius);
+  overflow-x: auto; font-size: 13.5px; line-height: 1.55;
+  border: 1px solid var(--border);
+  background: var(--code-bg) !important;
+}
+.code-block pre code { font-family: var(--mono); }
+
+/* Shiki emits both GitHub themes inline; swap them with the site theme. */
+html[data-theme="dark"] .astro-code,
+html[data-theme="dark"] .astro-code span {
+  color: var(--shiki-dark) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
+}
+
+/* ===================== Definition lists, steps and task lists ===================== */
+dl.terms { margin: 16px 0; }
+dl.terms dt { font-weight: 600; color: var(--text); margin-top: 14px; }
+dl.terms dd { margin: 2px 0 0; color: var(--text-soft); }
+
+ol.steps { counter-reset: step; list-style: none; padding-left: 0; }
+ol.steps > li { position: relative; padding-left: 40px; margin: 14px 0; }
+ol.steps > li::before {
+  counter-increment: step; content: counter(step);
+  position: absolute; left: 0; top: 1px;
+  width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  color: var(--accent, var(--accent-blue));
+  background: color-mix(in srgb, var(--accent, var(--accent-blue)) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, var(--accent-blue)) 35%, transparent);
+}
+
+/* Task lists, with GitHub's empty checkbox squares. */
+ul.checklist { list-style: none; padding-left: 0; margin: 0; }
+ul.checklist > li {
+  position: relative; margin: 0; padding: 8px 0 8px 28px;
+  border-bottom: 1px solid var(--border-muted);
+}
+ul.checklist > li:last-child { border-bottom: 0; }
+ul.checklist > li::before {
+  content: ""; position: absolute; left: 0; top: 13px;
+  width: 16px; height: 16px; border-radius: 3px;
+  border: 1px solid var(--border); background: var(--bg);
+}
+
+hr.divider { height: 1px; background: var(--border); margin: 32px 0; border: 0; }
+
+/* ===================== Pager ===================== */
+.pager {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border);
+}
+.pager a {
+  flex: 1 1 250px; display: flex; flex-direction: column;
+  padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius);
+  transition: border-color .2s var(--ease), transform .2s var(--ease);
+}
+.pager a:hover { border-color: var(--accent-blue); text-decoration: none; transform: translateY(-1px); }
+.pager .pg-dir { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-soft); margin-bottom: 2px; }
+.pager .pg-title { font-size: 15px; font-weight: 500; color: var(--accent-blue); }
+.pager a.next { text-align: right; }
+
+/* ===================== Floating buttons ===================== */
+/* Primer icon buttons, as on the GH-900 notes: Octicons, GitHub's 6px corner,
+   a hairline border and a resting shadow. Back to Top is the primary action of
+   the set and takes the accent-emphasis blue; Home and the theme switcher are
+   neutral default buttons. On hover the colour, border and shadow ease
+   together with a 2px lift. Colours are scoped here as --fab-* so each theme
+   (and Back to Top) only swaps values. */
+.float-btn, .float-theme {
+  --fab-bg: var(--surface);
+  --fab-bg-hover: var(--surface-2);
+  --fab-bg-active: var(--surface-3);
+  --fab-border: var(--border);
+  --fab-border-hover: var(--border);
+  --fab-fg: var(--text-soft);
+  --fab-fg-hover: var(--text);
+  --fab-shadow: 0 1px 1px rgba(31, 35, 40, .1), 0 3px 6px rgba(31, 35, 40, .12);
+  --fab-shadow-hover: 0 2px 4px rgba(31, 35, 40, .12), 0 8px 16px rgba(31, 35, 40, .16);
+  --fab-tip-bg: #24292f;
+
+  position: fixed; z-index: 90;
+  width: 40px; height: 40px; padding: 0; border-radius: var(--radius);
+  display: flex; align-items: center; justify-content: center;
+  background: var(--fab-bg); border: 1px solid var(--fab-border); color: var(--fab-fg);
+  box-shadow: var(--fab-shadow); cursor: pointer; text-decoration: none;
+  transition-property: opacity, visibility, transform, background-color, border-color, color, box-shadow;
+  transition-duration: .2s;
+  transition-timing-function: cubic-bezier(.33, 1, .68, 1);
+}
+html[data-theme="dark"] .float-btn, html[data-theme="dark"] .float-theme {
+  --fab-bg: var(--surface-3);
+  --fab-bg-hover: var(--border);
+  --fab-bg-active: #282e33;
+  --fab-border-hover: var(--text-soft);
+  --fab-shadow: 0 1px 1px rgba(1, 4, 9, .4), 0 3px 6px rgba(1, 4, 9, .8);
+  --fab-shadow-hover: 0 2px 4px rgba(1, 4, 9, .4), 0 8px 16px rgba(1, 4, 9, .6);
+  --fab-tip-bg: var(--text-muted);
+}
+.float-top {
+  --fab-bg: var(--accent-blue);
+  --fab-bg-hover: #0860ca;
+  --fab-bg-active: #0757ba;
+  --fab-border: rgba(31, 35, 40, .15);
+  --fab-border-hover: rgba(31, 35, 40, .15);
+  --fab-fg: #fff;
+  --fab-fg-hover: #fff;
+}
+html[data-theme="dark"] .float-top {
+  --fab-bg: #1f6feb;
+  --fab-bg-hover: #388bfd;
+  --fab-bg-active: #1158c7;
+  --fab-border: rgba(240, 246, 252, .1);
+  --fab-border-hover: rgba(240, 246, 252, .1);
+}
+
+/* Hidden until the reader scrolls past the fold. visibility only flips to
+   hidden once the fade has finished, and keeps the hidden buttons out of the
+   tab order. */
+.float-btn {
+  right: 24px;
+  opacity: 0; visibility: hidden;
+  transform: translateY(8px);
+}
+.float-btn.show { opacity: 1; visibility: visible; transform: none; }
+.float-top { bottom: 24px; }
+.float-home { bottom: 72px; }
+
+/* The theme switcher floats bottom-left rather than sitting in the top bar,
+   which is what leaves room for the full wordmark on a phone. Unlike the
+   right-hand stack it is always visible: switching theme has nothing to do
+   with how far down the page you are. */
+.float-theme { left: 24px; bottom: 24px; }
+
+/* Hover-capable pointers only, so a tap on a phone doesn't leave a button
+   stuck in its hover state. */
+@media (hover: hover) {
+  .float-btn.show:hover, .float-theme:hover {
+    transform: translateY(-2px); text-decoration: none;
+    background: var(--fab-bg-hover); border-color: var(--fab-border-hover); color: var(--fab-fg-hover);
+    box-shadow: var(--fab-shadow-hover);
+  }
+}
+.float-btn.show:active, .float-theme:active { transform: none; background: var(--fab-bg-active); }
+
+/* GitHub-style tooltip, built the way Primer's classic .tooltipped is: the
+   text comes from the control's aria-label and sits beside it, towards the
+   page. It appears after a short delay on hover and straight away on keyboard
+   focus. The theme switcher only gets one once its script has set the label. */
+.float-btn::after, .float-theme[aria-label]::after {
+  content: attr(aria-label);
+  position: absolute; top: 50%;
+  padding: .5em .75em; border-radius: var(--radius);
+  background: var(--fab-tip-bg); color: #fff;
+  font: 400 12px/1.5 var(--font); white-space: nowrap;
+  pointer-events: none; opacity: 0;
+  transition: opacity .15s ease-out, transform .15s ease-out;
+}
+.float-btn::after { right: calc(100% + 8px); transform: translate(4px, -50%); }
+.float-theme[aria-label]::after { left: calc(100% + 8px); transform: translate(-4px, -50%); }
+@media (hover: hover) {
+  .float-btn:hover::after, .float-theme:hover::after {
+    opacity: 1; transform: translate(0, -50%); transition-delay: .4s;
+  }
+}
+.float-btn:focus-visible::after, .float-theme:focus-visible::after { opacity: 1; transform: translate(0, -50%); }
+
+/* ===================== Footer ===================== */
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 44px 26px 28px; margin-top: 40px;
+  font-size: 13px; color: var(--text-soft);
+}
+.footer-inner { max-width: 1100px; margin: 0 auto 28px; display: flex; flex-wrap: wrap; gap: 32px 48px; }
+.footer-col { flex: 1 1 200px; min-width: 0; }
+.footer-col-author { flex: 2.2 1 320px; }
+.footer-inner h5 {
+  font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-soft); margin: 0 0 10px;
+}
+.footer-inner a { color: var(--text-soft); display: block; padding: 3px 0; font-size: 13px; transition: color var(--fast); }
+.footer-inner a:hover { color: var(--accent-blue); text-decoration: none; }
+
+.maintainer-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--accent-green); background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-green) 35%, transparent);
+  padding: 3px 10px; border-radius: 999px; margin-bottom: 8px;
+}
+.author-card { display: flex; gap: 14px; align-items: center; }
+.author-card > img {
+  width: 56px; height: 56px; border-radius: 50%; object-fit: cover; flex: none;
+  border: 2px solid var(--accent-blue);
+}
+.author-card .ac-name { font-weight: 700; font-size: 15px; color: var(--text); }
+.author-card .ac-role { font-size: 13px; color: var(--text-soft); margin-top: 2px; }
+.author-links { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.author-links a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 500; padding: 5px 10px;
+  border-radius: var(--radius); border: 1px solid var(--border);
+  transition: background var(--fast), color var(--fast);
+}
+.author-links a:hover { background: var(--surface-2); color: var(--text); }
+.author-links a svg, .author-links a img { width: 14px; height: 14px; flex: none; display: block; }
+
+.star-cta {
+  background: color-mix(in srgb, var(--accent-orange) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-orange) 30%, transparent);
+  border-radius: var(--radius); padding: 12px 16px; margin-top: 16px;
+  font-size: 13px; color: var(--text-soft);
+}
+.star-cta strong { color: var(--accent-orange); }
+.star-cta p { margin: 0 0 12px; line-height: 1.55; }
+.issue-note {
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 30%, transparent);
+  border-radius: var(--radius); padding: 12px 16px; margin-top: 10px;
+  font-size: 13px; color: var(--text-soft); line-height: 1.55;
+}
+.issue-note strong { color: var(--accent-blue); }
+/* Inline links inside the callouts: undo the footer's block-link styling. */
+.issue-note a { display: inline; padding: 0; font-size: inherit; color: var(--accent-blue); font-weight: 600; }
+/* Buttons grow to fill their row, so however they wrap the rows end flush.
+   Same pairing as the support callout on marcogrimaldi29.com. */
+.support-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.support-actions a {
+  display: inline-flex; flex: 1 1 auto; justify-content: center; align-items: center; gap: 8px;
+  min-height: 34px; padding: 6px 14px; border-radius: var(--radius); border: 1px solid transparent;
+  font-size: 13px; font-weight: 600;
+  transition: background .18s, border-color .18s, box-shadow .18s, transform .18s;
+}
+.support-actions a:hover { text-decoration: none; transform: translateY(-1px); }
+.support-actions svg { width: 16px; height: 16px; flex: none; display: block; }
+.support-actions .support-star { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+.support-actions .support-star:hover { background: var(--surface-3); border-color: var(--accent-blue); color: var(--text); }
+/* LinkedIn's own blue in both themes, lightening on hover. */
+.support-actions .support-linkedin { background: #0a66c2; border-color: #0a66c2; color: #fff; }
+.support-actions .support-linkedin:hover { background: #1275d1; border-color: #1275d1; color: #fff; }
+.footer-bottom {
+  max-width: 1100px; margin: 0 auto; padding-top: 18px;
+  border-top: 1px solid var(--border); font-size: 12px; color: var(--text-soft);
+  display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+}
+
+/* =====================================================================
+   Actions signature (GH-200)
+   Borrowed from the Actions tab and kept restrained: accents on a GitHub
+   page, not imitation run pages.
+   ===================================================================== */
+
+/* ---------- Run-status icons ---------- */
+.status { display: inline-flex; align-items: center; justify-content: center; flex: none; line-height: 0; }
+.status .octicon { vertical-align: middle; }
+.status-success     { color: var(--accent-green); }
+.status-failure     { color: var(--accent-red); }
+.status-skipped,
+.status-cancelled   { color: var(--text-muted); }
+.status-in-progress { color: var(--accent-orange); }
+/* The amber in-progress ring: a faint track with a spinning arc. */
+.status-ring { display: block; overflow: visible; }
+.status-ring .ring-track { stroke: currentColor; opacity: .3; }
+.status-ring .ring-arc {
+  stroke: currentColor; transform-origin: 8px 8px;
+  animation: ring-spin .9s linear infinite;
+}
+@keyframes ring-spin { to { transform: rotate(360deg); } }
+
+/* ---------- Run-summary strip ---------- */
+/* The bordered row of labelled cells at the top of an Actions run: hairline
+   separators come from the 1px gap over the border colour, so they stay right
+   however the row wraps. Column counts divide the cell counts evenly. */
+.run-summary {
+  --rs-cols: 4;
+  display: grid; grid-template-columns: repeat(var(--rs-cols), minmax(0, 1fr));
+  gap: 1px; margin: 0;
+  background: var(--border); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.run-summary.rs-6 { --rs-cols: 6; }
+.rs-cell { background: var(--surface); padding: 10px 16px 11px; min-width: 0; }
+.rs-label { font-size: 12px; line-height: 1.5; color: var(--text-soft); }
+.rs-value {
+  margin: 2px 0 0; display: flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--text);
+  overflow-wrap: anywhere;
+}
+.rs-icon { color: var(--accent, var(--accent-blue)); }
+.glance { margin: 20px 0; }
+.glance .rs-value { font-size: 17px; }
+
+/* ---------- Files and snippets ---------- */
+/* A code block that holds a file gets a header bar like GitHub's file viewer. */
+.code-file { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.code-file .file-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px 5px 14px; min-height: 38px;
+  background: var(--surface-2); border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 12.5px; color: var(--text);
+}
+.code-file .file-head > .octicon { color: var(--text-soft); }
+.file-path { min-width: 0; overflow-wrap: anywhere; }
+.file-excerpt { font-family: var(--font); font-size: 11px; line-height: 16px; padding: 0 7px; }
+.file-copy {
+  margin-left: auto; flex: none; width: 28px; height: 28px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: var(--radius);
+  background: transparent; color: var(--text-soft); cursor: pointer;
+  transition: background var(--fast), color var(--fast), border-color var(--fast);
+}
+.file-copy:hover { background: var(--surface-3); color: var(--text); border-color: var(--border); }
+.file-copy .i-done { display: none; }
+.file-copy.copied .i-copy { display: none; }
+.file-copy.copied .i-done { display: inline-block; color: var(--accent-green); }
+.code-file pre { border: 0 !important; border-radius: 0 !important; }
+
+/* `${{ }}` expressions in YAML, marked at build time by a Shiki transformer
+   (src/lib/shiki-expressions.ts), the way GitHub's workflow editor tints them. */
+.astro-code .gh-expr { background: color-mix(in srgb, var(--accent-blue) 14%, transparent); }
+.astro-code .gh-expr-s { border-radius: 4px 0 0 4px; box-shadow: -2px 0 0 color-mix(in srgb, var(--accent-blue) 14%, transparent); }
+.astro-code .gh-expr-e { border-radius: 0 4px 4px 0; box-shadow: 2px 0 0 color-mix(in srgb, var(--accent-blue) 14%, transparent); }
+.astro-code .gh-expr-s.gh-expr-e {
+  border-radius: 4px;
+  box-shadow: -2px 0 0 color-mix(in srgb, var(--accent-blue) 14%, transparent), 2px 0 0 color-mix(in srgb, var(--accent-blue) 14%, transparent);
+}
+
+/* ---------- Log panels ---------- */
+/* Runner output drawn like an Actions job log: monospace on the canvas, a
+   muted gutter, foldable groups and tinted annotation lines. Line numbers come
+   from data-n, so they are never copied or indexed. */
+.log-panel { margin: 16px 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); overflow: hidden; }
+.log-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--border);
+  font-size: 13px; font-weight: 600; color: var(--text);
+}
+.log-title { font-family: var(--mono); font-weight: 600; }
+.log-body { overflow-x: auto; padding: 8px 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.65; scrollbar-width: thin; }
+.log-lines { display: inline-block; min-width: 100%; }
+.log-line { display: flex; align-items: center; gap: 6px; padding-right: 16px; white-space: pre; color: var(--text); }
+.log-line::before {
+  content: attr(data-n); flex: none; width: 3.4em; margin-right: var(--indent, 0px); padding-right: 12px;
+  text-align: right; color: var(--text-muted); user-select: none;
+}
+.log-group > .log-line:not(.log-summary) { --indent: 18px; }
+.log-summary { cursor: pointer; list-style: none; font-weight: 600; }
+.log-summary::-webkit-details-marker { display: none; }
+.log-summary:hover { background: var(--surface-2); }
+.log-chevron { color: var(--text-soft); transition: transform var(--fast) var(--ease); }
+.log-group[open] > .log-summary .log-chevron { transform: rotate(90deg); }
+.log-error   { background: color-mix(in srgb, var(--accent-red) 11%, transparent); }
+.log-warning { background: color-mix(in srgb, var(--accent-orange) 11%, transparent); }
+.log-notice  { background: color-mix(in srgb, var(--accent-blue) 9%, transparent); }
+.log-error .log-icon, .log-error .log-prefix     { color: var(--accent-red); }
+.log-warning .log-icon, .log-warning .log-prefix { color: var(--accent-orange); }
+.log-notice .log-icon, .log-notice .log-prefix   { color: var(--accent-blue); }
+.log-prefix { font-weight: 600; }
+.log-debug .log-text { color: var(--accent-purple); }
+.log-mask { color: var(--text-muted); }
+.log-loc { color: var(--text-muted); }
+
+/* ---------- Procedures as a job's steps ---------- */
+.job-steps { margin: 20px 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.js-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 16px; border-bottom: 1px solid var(--border);
+  font-size: 14px; font-weight: 600; color: var(--text);
+}
+.content ol.js-list { list-style: none; margin: 0; padding: 6px 0; }
+.content li.js-step { margin: 0; color: var(--text); }
+.js-step summary {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 16px; cursor: pointer; list-style: none;
+  font-size: 14px; color: var(--text);
+  transition: background var(--fast);
+}
+.js-step summary::-webkit-details-marker { display: none; }
+.js-step summary:hover { background: var(--surface-2); }
+.js-chevron { color: var(--text-soft); transition: transform var(--fast) var(--ease); }
+.js-step details[open] > summary .js-chevron { transform: rotate(90deg); }
+.js-name { min-width: 0; }
+.js-body { padding: 2px 16px 12px 56px; font-size: 14px; color: var(--text-soft); }
+.js-body > :first-child { margin-top: 4px; }
+.js-body > :last-child { margin-bottom: 0; }
+.js-body .code-block, .js-body .code-file { margin: 10px 0; }
+
+/* ---------- Commonly mistaken topics: a failed run, then the fix ---------- */
+.mistake { margin: 16px 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.mk-topic { padding: 9px 16px; font-size: 14.5px; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--border); }
+.mk-row { display: grid; grid-template-columns: 16px 64px minmax(0, 1fr); gap: 4px 10px; align-items: start; padding: 10px 16px; }
+.mk-row .status { margin-top: 3px; }
+.mk-row + .mk-row { border-top: 1px solid var(--border-muted); }
+.mk-fail { background: color-mix(in srgb, var(--accent-red) 5%, transparent); }
+.mk-pass { background: color-mix(in srgb, var(--accent-green) 5%, transparent); }
+.mk-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; line-height: 22px; }
+.mk-fail .mk-label { color: var(--accent-red); }
+.mk-pass .mk-label { color: var(--accent-green); }
+.mk-text { font-size: 14px; color: var(--text-soft); }
+.content .mk-text p { margin: 0 0 6px; }
+.mk-text > :last-child { margin-bottom: 0; }
+
+/* ---------- Home: the skills run as a pipeline ---------- */
+/* One column in study-guide order, joined by a thin grey connector with a node
+   dot at each card, like jobs chained with needs: in the run graph. */
+.content ol.pipeline { list-style: none; margin: 20px 0 8px; padding: 0 0 0 30px; }
+.content li.pipe-item { position: relative; margin: 0 0 14px; color: inherit; }
+.pipe-item:last-child { margin-bottom: 0; }
+.pipe-item::before {
+  content: ""; position: absolute; left: -26px; top: 25px; z-index: 1;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--text-muted);
+}
+.pipe-item:not(:last-child)::after {
+  content: ""; position: absolute; left: -21px; top: 37px;
+  width: 2px; height: calc(100% - 12px + 14px);
+  background: var(--border);
+}
+.pipe-card { display: block; }
+.pc-head { display: flex; align-items: center; gap: 12px; }
+.pc-head .card-icon { width: 32px; height: 32px; margin: 0; }
+.pc-head h3 { flex: 1; min-width: 0; margin: 0; }
+.pc-weight { flex: none; font-family: var(--mono); font-size: 13px; color: var(--text-soft); }
+.pipe-card p { margin: 10px 0 0; }
+.pipe-card .weight-track { margin-top: 12px; }
+
+/* ---------- Mermaid diagrams drawn like the run graph ---------- */
+.figure-run svg .node rect,
+.figure-run svg .node .label-container { rx: 6px; ry: 6px; }
+
+/* ===================== Responsive ===================== */
+
+/* Below this width the right column would squeeze the prose, so the outline
+   folds into a card between the page title and the body instead. */
+@media (max-width: 1280px) {
+  .page {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "head" "aside" "main" "pager";
+  }
+  .on-this-page {
+    position: static; max-height: none; overflow: visible;
+    margin: 20px 0 4px; padding: 0;
+  }
+  .otp { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .otp > summary {
+    pointer-events: auto; cursor: pointer; padding: 10px 16px;
+    font-size: 13px; color: var(--text);
+    transition: background var(--fast);
+    border-radius: var(--radius);
+  }
+  .otp > summary:hover { background: var(--surface-2); }
+  .otp[open] > summary { border-bottom: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0; }
+  .otp-chevron { display: block; color: var(--text-soft); transition: transform .25s var(--ease); }
+  .otp[open] .otp-chevron { transform: rotate(180deg); }
+  .otp-body { padding: 12px 16px 14px; max-height: min(52vh, 420px); overflow-y: auto; scrollbar-width: thin; }
+  .otp-marker { left: 15px; }
+  .otp-list { padding-left: 14px; }
+}
+
+@media (max-width: 980px) {
+  .layout, .layout[data-sidebar="collapsed"] { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .sidebar-open { display: inline-flex; }
+  /* The drawer stays the same rounded, bordered card as the docked rail rather
+     than becoming a flush full-bleed panel, so the rail keeps its identity at
+     every width. Inset from the edges is what lets the corners actually read. */
+  .sidebar {
+    position: fixed; z-index: 140;
+    top: var(--drawer-gap); left: var(--drawer-gap); bottom: auto;
+    width: min(320px, calc(100vw - var(--drawer-gap) * 2 - 24px));
+    /* Explicit height rather than top+bottom: the rail is a grid item carrying
+       align-self: start, which otherwise shrinks it to its content. dvh also
+       keeps it correct while mobile browser chrome shows and hides. */
+    height: calc(100dvh - var(--drawer-gap) * 2);
+    max-height: none;
+    border-radius: var(--radius);
+    border-width: 1px;
+    box-shadow: var(--shadow-overlay);
+    /* Clear the left inset as well as its own width, so no corner peeks out. */
+    transform: translateX(calc(-100% - var(--drawer-gap) - 4px));
+    /* visibility keeps the closed drawer out of the tab order, so Tab never
+       lands on an off-screen link and scrolls the page sideways. */
+    visibility: hidden;
+    transition: transform .28s var(--ease), visibility 0s linear .28s;
+  }
+  .layout[data-drawer="open"] .sidebar {
+    transform: translateX(0); visibility: visible;
+    transition: transform .28s var(--ease), visibility 0s;
+  }
+  .sb-head { padding: 12px 10px 12px 16px; }
+  .sb-scroll { padding: 8px 0 16px; }
+  .sb-link { padding: 10px 16px; font-size: 15px; }
+  .sb-fold { display: none; }
+  .sb-close { display: inline-flex; }
+  /* Freeze the page behind an open drawer. */
+  html.drawer-open, html.drawer-open body { overflow: hidden; }
+  .sb-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 130;
+    background: var(--backdrop);
+    opacity: 0; pointer-events: none; transition: opacity .25s var(--ease);
+    border: 0; padding: 0; cursor: pointer;
+  }
+  .layout[data-drawer="open"] .sb-backdrop { opacity: 1; pointer-events: auto; }
+  .footer-col-author { flex-basis: 100%; }
+  .footer-bottom { flex-direction: column; }
+}
+
+@media (max-width: 760px) {
+  .layout { padding: 20px 16px 64px; }
+  .site-footer { padding: 32px 16px 24px; }
+  .hero { padding: 20px 0 16px; }
+  .hero h1 { font-size: 28px; }
+  .hero-title { gap: 10px; }
+  .hero-logo { width: 38px; height: 38px; }
+  .lead { font-size: 16px; }
+  .page-head h1 { font-size: 26px; }
+  .content h2 { font-size: 21px; }
+  .content h3 { font-size: 18px; }
+  .card-grid { grid-template-columns: 1fr; }
+  .pager a.next { text-align: left; }
+  .run-summary.rs-6 { --rs-cols: 3; }
+  .content ol.pipeline { padding-left: 24px; }
+  .pipe-item::before { left: -22px; }
+  .pipe-item:not(:last-child)::after { left: -17px; }
+  .pc-head h3 { font-size: 15px; }
+  .js-body { padding-left: 16px; }
+  /* Tighten the bar so the full wordmark fits on a phone rather than being
+     clipped by the tools beside it. The repo link keeps its whole label —
+     star, "on" and the GitHub mark — and gives up padding instead. */
+  .site-header { padding: 0 12px; gap: 10px; }
+  .header-tools { gap: 6px; }
+  .ghub-link { padding: 0 9px; gap: 5px; }
+  .brand { gap: 9px; }
+  .brand img { width: 28px; height: 28px; }
+}
+
+/* Smallest phones still in circulation, down to 320px. The wordmark stays
+   whole; everything around it gives up a few more pixels instead, and the
+   wordmark itself steps down only slightly. */
+@media (max-width: 380px) {
+  .site-header { padding: 0 6px; gap: 6px; }
+  .site-header .icon-btn { width: 30px; height: 30px; }
+  .brand { gap: 6px; font-size: 15px; }
+  .brand img { width: 24px; height: 24px; }
+  .ghub-link { height: 30px; padding: 0 6px; gap: 4px; font-size: 12px; }
+  .ghub-link .octicon { width: 15px; height: 15px; }
+  .ghub-link .ghub-star { font-size: 12px; }
+  .header-tools { gap: 4px; }
+  .float-theme { left: 16px; bottom: 16px; }
+  .float-btn { right: 16px; }
+  .float-top { bottom: 16px; }
+  .float-home { bottom: 64px; }
+  .code-block .lang {
+    position: static; display: block; width: fit-content; margin: 0 0 6px auto;
+  }
+}
+
+/* A 320px window with a classic (non-overlay) scrollbar leaves only ~302px of
+   layout: give up a few more pixels of padding, gap and logo, never wordmark. */
+@media (max-width: 330px) {
+  .site-header { padding: 0 4px; gap: 4px; }
+  .brand { gap: 5px; }
+  .brand img { width: 22px; height: 22px; }
+  .header-tools { gap: 3px; }
+  .ghub-link { padding: 0 5px; }
+}
+
+/* Phones: the run-summary strip wraps to two columns, and a mistake's label
+   moves above its text. */
+@media (max-width: 560px) {
+  .run-summary, .run-summary.rs-6 { --rs-cols: 2; }
+  .rs-cell { padding: 9px 12px 10px; }
+  .mk-row { grid-template-columns: 16px minmax(0, 1fr); }
+  .mk-text { grid-column: 1 / -1; }
+}
+
+/* ===================== Motion and print ===================== */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .bg-animation .cloud, .code-rain .rain-col { animation: none !important; }
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    transition-duration: .001ms !important;
+  }
+  /* Except the floating buttons' colour and opacity fades, which aren't
+     motion: keep those, and drop the slide-in, hover lift and tooltip nudge. */
+  .float-btn, .float-theme { transition-duration: .2s !important; }
+  .float-btn::after, .float-theme::after { transition-duration: .15s !important; }
+  .float-btn, .float-btn.show:hover, .float-theme:hover { transform: none; }
+  .float-btn::after, .float-theme[aria-label]::after { transform: translate(0, -50%); }
+  /* The in-progress ring holds still rather than spinning. */
+  .status-ring .ring-arc { animation: none !important; }
+}
+
+@media print {
+  .site-header, .sidebar, .sb-backdrop, .site-footer, .float-btn, .float-theme, .pager,
+  .bg-animation, .code-rain, .file-copy { display: none !important; }
+  .log-body { overflow: visible; }
+  .log-line { white-space: pre-wrap; }
+  .layout, .layout[data-sidebar="collapsed"] { grid-template-columns: 1fr; padding: 0; }
+  body { background: #fff; color: #000; font-size: 11pt; }
+  .card, .callout, .figure, .table-wrap, .skill-card { break-inside: avoid; box-shadow: none; }
+}

@@ -1,0 +1,38 @@
+---
+import type { NotePage } from '../data/site';
+import { href } from '../lib/urls';
+import Octicon from './Octicon.astro';
+
+/**
+ * A study-page card in the GH-300 / GH-900 style: a tinted Octicon tile, the
+ * title, a short description and — for skill pages — a thin weighting bar with
+ * a monospace label. Other pages show their role in monospace instead.
+ *
+ * Bars are drawn to scale against the largest possible weighting (25%), and
+ * filled when they scroll into view by the script on the home page.
+ */
+interface Props {
+  page: NotePage;
+}
+
+const { page } = Astro.props;
+const MAX_WEIGHT = 25;
+---
+
+<a class="skill-card" href={href(page.slug)} style={`--accent:${page.accent}`}>
+  <div class="card-icon"><Octicon name={page.icon} size={20} /></div>
+  <h3>{page.skill ? `${page.skill}. ${page.label}` : page.label}</h3>
+  <p>{page.blurb}</p>
+  {
+    page.weightPct ? (
+      <div class="weight-bar">
+        <div class="weight-track">
+          <span class="weight-fill" data-pct={((page.weightPct / MAX_WEIGHT) * 100).toFixed(1)} />
+        </div>
+        <span class="weight-label">{page.weight}</span>
+      </div>
+    ) : (
+      <div class="card-weight">{page.badge}</div>
+    )
+  }
+</a>

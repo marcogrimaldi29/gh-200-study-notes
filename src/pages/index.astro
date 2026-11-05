@@ -1,0 +1,306 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Callout from '../components/Callout.astro';
+import Mermaid from '../components/Mermaid.astro';
+import NavCard from '../components/NavCard.astro';
+import Octicon from '../components/Octicon.astro';
+import RunSummary from '../components/RunSummary.astro';
+import Sidebar from '../components/Sidebar.astro';
+import { PAGES, SITE, SKILL_PAGES } from '../data/site';
+import { absolute, asset, href } from '../lib/urls';
+
+// Foundations first, then the final-review pages, after the skill pipeline.
+const otherPages = PAGES.filter((p) => p.slug !== '' && p.group !== 'skills');
+const MAX_WEIGHT = 25;
+
+const description = `Exam-focused study notes for Exam ${SITE.exam}: ${SITE.examTitle}. Aligned to the skills measured as of ${SITE.skillsMeasured}, with run-graph diagrams, workflow and action samples, log walk-throughs and exam caveats.`;
+
+const schema = [
+  {
+    '@type': 'Course',
+    name: `Exam ${SITE.exam}: ${SITE.examTitle} — Study Notes`,
+    description,
+    url: absolute(SITE.origin, ''),
+    inLanguage: 'en',
+    provider: { '@type': 'Person', name: SITE.author.name, url: SITE.author.site },
+    teaches: SKILL_PAGES.map((p) => p.label),
+    hasCourseInstance: { '@type': 'CourseInstance', courseMode: 'online', courseWorkload: 'PT30H' },
+  },
+];
+
+// The one picture almost every GH-200 question sits on: an event starts a
+// workflow run, jobs fan out to runners, steps run actions and scripts.
+const runModel = `
+flowchart LR
+  EV["Event<br/>push · pull_request · schedule · workflow_dispatch"] --> WF["Workflow<br/>.github/workflows/*.yml"]
+  WF --> BUILD["Job: build<br/>runs-on: ubuntu-latest"]
+  WF --> LINT["Job: lint<br/>runs-on: ubuntu-latest"]
+  BUILD --> DEPLOY["Job: deploy<br/>needs: [build, lint]<br/>environment: production"]
+  LINT --> DEPLOY
+  class BUILD,LINT success
+  class DEPLOY pending
+`;
+
+const journey = `
+flowchart TB
+  F["Actions Foundations<br/>events · jobs · steps · runners"] --> S1["Skill 1 · Author workflows<br/>20–25%"]
+  S1 --> S2["Skill 2 · Consume and troubleshoot<br/>15–20%"]
+  S1 --> S3["Skill 3 · Author actions<br/>15–20%"]
+  S2 --> S4["Skill 4 · Enterprise and runners<br/>20–25%"]
+  S3 --> S4
+  S4 --> S5["Skill 5 · Secure and optimize<br/>10–15%"]
+  S5 --> REF["Syntax reference"]
+  REF --> TIPS["Exam tips and caveats"]
+`;
+
+const modules = [
+  {
+    title: 'Automate development tasks by using GitHub Actions',
+    url: 'https://learn.microsoft.com/en-us/training/modules/github-actions-automate-tasks/',
+    maps: 'Foundations · Skill 1 · Skill 3',
+  },
+  {
+    title: 'Build continuous integration workflows by using GitHub Actions',
+    url: 'https://learn.microsoft.com/en-us/training/modules/github-actions-ci/',
+    maps: 'Skill 1 · Skill 2',
+  },
+  {
+    title: 'Build and deploy applications to Azure by using GitHub Actions',
+    url: 'https://learn.microsoft.com/en-us/training/modules/github-actions-cd/',
+    maps: 'Skill 1 · Skill 5',
+  },
+  {
+    title: 'Automate GitHub by using GitHub Script',
+    url: 'https://learn.microsoft.com/en-us/training/modules/automate-github-using-github-script/',
+    maps: 'Skill 1 · Skill 2',
+  },
+  {
+    title: 'Leverage GitHub Actions to publish to GitHub Packages',
+    url: 'https://learn.microsoft.com/en-us/training/modules/github-actions-packages/',
+    maps: 'Skill 1 · Skill 5',
+  },
+  {
+    title: 'Create and publish custom GitHub actions',
+    url: 'https://learn.microsoft.com/en-us/training/modules/create-custom-github-actions/',
+    maps: 'Skill 3',
+  },
+  {
+    title: 'Manage GitHub Actions in the enterprise',
+    url: 'https://learn.microsoft.com/en-us/training/modules/manage-github-actions-enterprise/',
+    maps: 'Skill 4',
+  },
+];
+
+const glance = [
+  { label: 'Exam code', value: SITE.exam },
+  { label: 'Minutes', value: SITE.facts.minutes },
+  { label: 'Passing score', value: SITE.facts.passing },
+  { label: 'Skill areas', value: SKILL_PAGES.length },
+  { label: 'Validity', value: SITE.facts.validity },
+  { label: 'Retake after', value: SITE.facts.retake },
+];
+---
+
+<BaseLayout
+  title={`${SITE.name} · ${SITE.examTitle}`}
+  description={description}
+  slug=""
+  ogType="website"
+  schema={schema}
+>
+  <div class="layout" data-sidebar="expanded" data-drawer="closed">
+    <Sidebar current="" />
+
+    {/* The home page shares the note pages' rail so navigation never changes
+        shape between them, but keeps a plain block flow: it has a hero rather
+        than a page header, and no section outline. */}
+    <main class="page page-home" id="main">
+      {/* The GH-300 / GH-900 hero: glowing logo, gradient title, lead, Labels. */}
+      <section class="hero">
+        <div class="hero-title">
+          <img class="hero-logo" src={asset('images/site-mark-no-bg.png')} alt="" width="56" height="56" />
+          <h1>{SITE.exam}: {SITE.examTitle}</h1>
+        </div>
+        <p class="lead">
+          A complete, exam-focused companion for the <strong>{SITE.examTitle}</strong> certification, built around the
+          skills measured as of {SITE.skillsMeasured}. Learn to write, read, debug, package, govern and secure workflows
+          — and to tell at a glance what a run will do before it starts.
+        </p>
+        <div class="hero-labels">
+          {SITE.heroLabels.map((l) => <span class={`label l-${l.color}`}>{l.text}</span>)}
+        </div>
+      </section>
+
+      <div class="content">
+        <div class="disclaimer">
+          <strong>Disclaimer:</strong> these notes are an independent study aid for <strong>learning purposes
+          only</strong>, not affiliated with or endorsed by GitHub or Microsoft. GitHub Actions changes every few weeks —
+          runner images, action majors and limits all move — so always verify details against the official
+          documentation linked throughout.
+        </div>
+
+        <h2 id="exam-at-a-glance">Exam at a glance</h2>
+        <RunSummary cells={glance} class="glance" />
+
+        <Callout type="exam" title="Exam format">
+          <p>
+            The exam is proctored, scheduled through Pearson VUE and offered in English, Spanish, Portuguese (Brazil),
+            Korean and Japanese. It is provided by Microsoft but <strong>maintained by GitHub</strong>. The certification
+            page warns that it <strong>may include interactive components</strong>, so try the
+            <a href="https://ghcertdemo.starttest.com/" target="_blank" rel="noopener">exam sandbox</a> first. Most
+            questions cover <strong>generally available</strong> features, but commonly used preview features can appear.
+            There is <strong>no practice assessment</strong> yet. If you fail, you can retake after 24 hours; later retakes
+            have longer waits.
+          </p>
+        </Callout>
+
+        <h2 id="what-the-exam-validates">What the exam validates</h2>
+        <p>
+          {SITE.exam} validates that you can <strong>automate software delivery with GitHub Actions</strong> end to end:
+          write workflows and actions, read what a run did from its configuration and logs, run Actions at organisation
+          and enterprise scale, and keep it secure and economical. It is a <strong>reading exam</strong> as much as a
+          recall exam — most questions show a workflow, an <code>action.yml</code>, a log or a settings page and ask what
+          happens, what is wrong, or which key fixes it. Expect to evaluate <code>{'${{ }}'}</code> expressions in your
+          head, expand matrices, follow <code>needs:</code> chains and spot the injection risk in a <code>run:</code>
+          line.
+        </p>
+        <Callout type="note" title="How to use these notes">
+          <p>
+            Start with <a href={href('actions-foundations')}>Actions Foundations</a> for the vocabulary and the run
+            model. Work the five skill pages in outline order — Skills 1 and 4 are the heaviest, so give them the most
+            time — and keep the <a href={href('syntax-reference')}>Syntax reference</a> open while you practise. Drill
+            <a href={href('exam-tips')}>Exam tips &amp; caveats</a> in the final week. These notes are a
+            <strong>companion</strong>, not a replacement: pair every page with a throwaway repository where you break
+            and fix real runs, and with the official Learn modules listed below.
+          </p>
+        </Callout>
+
+        <Callout type="rename" title="Names and syntax that moved">
+          <p>
+            The study guide says <strong>starter workflows</strong>; the current documentation calls them
+            <strong>workflow templates</strong>. <code>::set-output</code> and <code>::save-state</code> are retired in
+            favour of the <code>$GITHUB_OUTPUT</code> and <code>$GITHUB_STATE</code> files. JavaScript actions now run on
+            <strong>Node 24</strong> — Node 20 left the runners on 23 September 2026. And the study guide's
+            <strong>immutable actions</strong> rollout was taken off GitHub's roadmap in December 2025; workflow
+            <strong>lockfiles</strong> and <strong>immutable releases</strong> are what shipped. The full translation
+            table is on the <a href={`${href('actions-foundations')}#renames-and-retired-syntax`}>Foundations page</a>.
+          </p>
+        </Callout>
+
+        <h2 id="skills-measured">Skills measured</h2>
+        <p>
+          Two skills carry up to a quarter of the exam each: <strong>authoring workflows</strong> and
+          <strong>managing Actions for the enterprise</strong>. Consuming and troubleshooting workflows and authoring
+          actions sit in the middle, and security and optimisation is the lightest — though security thinking (least
+          privilege, pinning, injection) runs through every other skill. The skills below run in study-guide order.
+        </p>
+        <ol class="pipeline" aria-label="Skills, in study-guide order">
+          {
+            SKILL_PAGES.map((p) => (
+              <li class="pipe-item">
+                <a class="skill-card pipe-card" href={href(p.slug)} style={`--accent:${p.accent}`}>
+                  <div class="pc-head">
+                    <div class="card-icon">
+                      <Octicon name={p.icon} />
+                    </div>
+                    <h3>
+                      {p.skill}. {p.label}
+                    </h3>
+                    <span class="pc-weight">{p.weight}</span>
+                  </div>
+                  <p>{p.blurb}</p>
+                  <div class="weight-track" aria-hidden="true">
+                    <span class="weight-fill" data-pct={(((p.weightPct ?? 0) / MAX_WEIGHT) * 100).toFixed(1)} />
+                  </div>
+                </a>
+              </li>
+            ))
+          }
+        </ol>
+        <p class="wr-note">Bars are drawn to scale against the largest possible weighting, 25%.</p>
+
+        <h2 id="start-here-and-final-review">Start here and final review</h2>
+        <div class="card-grid">
+          {otherPages.map((p) => <NavCard page={p} />)}
+        </div>
+
+        <h2 id="a-workflow-run-in-one-picture">A workflow run in one picture</h2>
+        <p>
+          Almost every {SITE.exam} question sits somewhere on this graph. An <strong>event</strong> starts a
+          <strong>workflow run</strong>; its <strong>jobs</strong> run in parallel on fresh <strong>runners</strong>
+          unless <code>needs:</code> chains them; each job's <strong>steps</strong> run scripts or
+          <strong>actions</strong> in order on the same machine. If you can say which box a key belongs to, you can
+          usually eliminate half the answers.
+        </p>
+        <Mermaid
+          code={runModel}
+          variant="run"
+          caption="Drawn like the graph on an Actions run summary. build and lint ran in parallel and succeeded; deploy waits on both, then pauses at the production environment's protection rules (amber border: pending)."
+        />
+
+        <h2 id="suggested-study-order">Suggested study order</h2>
+        <Mermaid
+          code={journey}
+          caption="Foundations first, then the skills. Skills 2 and 3 both build on Skill 1 and can be studied in either order; both feed the enterprise skill."
+        />
+
+        <h2 id="official-learning-path">The official learning path</h2>
+        <p>
+          Course {SITE.course}, <em>{SITE.courseTitle}</em>, is a one-day instructor-led course. Its self-paced content
+          is a two-part learning path of seven Microsoft Learn modules. Read each alongside the skill page it maps to —
+          and note that the modules predate the January 2026 rewrite, so several of the newer bullets (YAML anchors,
+          service containers, attestations, OIDC, retention APIs) are only in the documentation.
+        </p>
+        <div class="table-wrap">
+          <table class="tbl">
+            <thead><tr><th>Learn module</th><th>Maps to</th></tr></thead>
+            <tbody>
+              {
+                modules.map((m) => (
+                  <tr>
+                    <td>
+                      <a href={m.url} target="_blank" rel="noopener">
+                        {m.title}
+                      </a>
+                    </td>
+                    <td>{m.maps}</td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <Callout type="tip" title="Two habits that pay off more than extra reading">
+          <p>
+            <strong>One:</strong> for every key you learn, know <em>when</em> it is evaluated — at parse time, when the run
+            is queued, when the job starts, or when the step runs. That one question explains why <code>env</code> cannot
+            be used in <code>runs-on</code>, why environment secrets are only read when the job starts, and why an
+            <code>if:</code> on a job cannot see step outputs. <strong>Two:</strong> break things on purpose in a test
+            repository — fail a matrix leg, mask a value, call a reusable workflow without <code>secrets: inherit</code>,
+            then read the log. Ten minutes of that teaches more than any page.
+          </p>
+        </Callout>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // Fill the weighting bars when they scroll into view.
+    const bars = document.querySelectorAll<HTMLElement>('.weight-fill[data-pct]');
+    if (bars.length) {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const el = entry.target as HTMLElement;
+            el.style.width = `${el.dataset.pct}%`;
+            observer.unobserve(el);
+          });
+        },
+        { threshold: 0.35 },
+      );
+      bars.forEach((b) => observer.observe(b));
+    }
+  </script>
+</BaseLayout>

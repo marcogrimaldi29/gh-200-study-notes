@@ -1,0 +1,88 @@
+---
+import octicons from '@primer/octicons';
+import { parseLog, type LogLine } from '../lib/log';
+import StatusIcon, { type Status } from './StatusIcon.astro';
+
+/**
+ * Runner output drawn like an Actions job log, built at build time from a
+ * `log` block (CodeBlock with lang="log" renders this).
+ *
+ * Monospace on the canvas, a muted line-number gutter, `::group::` sections as
+ * foldable rows (native <details>), annotation lines tinted and iconed like
+ * Actions annotations, and masked values shown as `***`. Long lines scroll
+ * sideways instead of wrapping, as in the real log.
+ *
+ * Each line's markup is assembled as a string here rather than in the template:
+ * lines are `white-space: pre`, so any whitespace a template puts between
+ * expressions would show up as stray indentation in the log.
+ *
+ * Line numbers are drawn from a data attribute by CSS, so they never end up in
+ * the text that search indexes or that a reader copies.
+ */
+interface Props {
+  code: string;
+  /** Step name shown in the panel header, e.g. "Run npm test". */
+  title?: string;
+  /** Status of that step, shown as its status icon. */
+  status?: Status;
+  /** Open every group, for samples whose point is inside one. */
+  open?: boolean;
+}
+
+const { code, title, status, open = false } = Astro.props;
+const items = parseLog(code.replace(/^\n+|\s+$/g, ''));
+
+const icon = (name: string) =>
+  (octicons as Record<string, { toSVG: (o?: Record<string, unknown>) => string }>)[name].toSVG({
+    width: 12,
+    height: 12,
+    class: name === 'chevron-right' ? 'log-chevron' : 'log-icon',
+  });
+
+const ICON = { error: 'x-circle', warning: 'alert', notice: 'info' } as const;
+const PREFIX = { error: 'Error: ', warning: 'Warning: ', notice: 'Notice: ', debug: '' } as const;
+
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Masked values are styled; everything else is escaped verbatim.
+const text = (s: string) => esc(s).replace(/\*\*\*/g, '<span class="log-mask">***</span>');
+
+function inner(l: LogLine): string {
+  const a = l.annotation;
+  const ic = a && a !== 'debug' ? icon(ICON[a]) : '';
+  const prefix = a ? `<span class="log-prefix">${PREFIX[a]}</span>` : '';
+  const loc = l.location ? `<span class="log-loc"> ${esc(l.location)}</span>` : '';
+  return `${ic}<span class="log-text">${prefix}${text(l.text)}${loc}</span>`;
+}
+
+const cls = (l: LogLine) => ['log-line', l.annotation && `log-${l.annotation}`].filter(Boolean).join(' ');
+const summary = (t: string) => `${icon('chevron-right')}<span class="log-text">${text(t)}</span>`;
+---
+
+<figure class="log-panel">
+  {
+    title && (
+      <figcaption class="log-head">
+        {status && <StatusIcon status={status} />}
+        <span class="log-title">{title}</span>
+      </figcaption>
+    )
+  }
+  <div class="log-body" tabindex="0" role="region" aria-label={title ? `Log: ${title}` : 'Job log'}>
+    <div class="log-lines">
+      {
+        items.map((item) =>
+          item.kind === 'group' ? (
+            <details class="log-group" open={open || undefined}>
+              <summary class="log-line log-summary" data-n={item.n} set:html={summary(item.title)} />
+              {item.lines.map((l) => (
+                <div class={cls(l)} data-n={l.n} set:html={inner(l)} />
+              ))}
+            </details>
+          ) : (
+            <div class={cls(item)} data-n={item.n} set:html={inner(item)} />
+          ),
+        )
+      }
+    </div>
+  </div>
+</figure>

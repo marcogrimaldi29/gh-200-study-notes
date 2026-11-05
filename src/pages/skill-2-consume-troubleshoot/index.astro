@@ -1,0 +1,421 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import { href } from '../../lib/urls';
+
+const whyNoRun = `
+flowchart TD
+  Q["The workflow did not run"] --> A{"Is the file on the<br/>branch the event uses?"}
+  A -->|"no"| A1["schedule, workflow_dispatch, repository_dispatch,<br/>workflow_run read the default branch"]
+  A -->|"yes"| B{"Do the on: filters match?"}
+  B -->|"no"| B1["branches, paths and types<br/>must all match"]
+  B -->|"yes"| C{"Who caused the event?"}
+  C -->|"GITHUB_TOKEN"| C1["No new run, except<br/>workflow_dispatch and repository_dispatch"]
+  C -->|"a fork contributor"| C2["Waiting for approval<br/>to run fork workflows"]
+  C -->|"a person or an app"| D{"Is the workflow enabled?"}
+  D -->|"no"| D1["Disabled by hand, or<br/>after 60 days without activity"]
+  D -->|"yes"| E["Check the commit message for<br/>skip ci, and the PR for conflicts"]
+`;
+
+const failedLog = `::group::Run npm ci
+npm ci
+added 812 packages, and audited 813 packages in 14s
+::endgroup::
+::group::Run npm run build
+> web@2.4.0 build
+> tsc -p tsconfig.build.json && vite build
+src/api/client.ts(18,7): error TS2322: Type 'string' is not assignable to type 'number'.
+::endgroup::
+::error file=src/api/client.ts,line=18,col=7::Type 'string' is not assignable to type 'number'.
+Error: Process completed with exit code 2.`;
+
+const permLog = `::group::Run gh pr comment "$PR" --body "Preview ready"
+gh pr comment "$PR" --body "Preview ready"
+::endgroup::
+GraphQL: Resource not accessible by integration (addComment)
+Error: Process completed with exit code 1.`;
+
+const debugLog = `##[debug]Evaluating condition for step: 'Deploy'
+##[debug]Evaluating: (success() && (github.ref == 'refs/heads/main'))
+##[debug]Evaluating And:
+##[debug]..Evaluating success:
+##[debug]..=> true
+##[debug]..Evaluating Equal:
+##[debug]....Evaluating Index:
+##[debug]......Evaluating github:
+##[debug]......=> Object
+##[debug]....=> 'refs/heads/feature/login'
+##[debug]..=> false
+##[debug]=> false
+##[debug]Result: false`;
+
+const anchored = `jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: &short 10
+    env: &node-env
+      NODE_ENV: test
+      CI: 'true'
+    steps:
+      - &install
+        name: Install
+        run: npm ci
+      - run: npm test
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: *short
+    env: *node-env
+    steps:
+      - *install
+      - run: npm run e2e`;
+
+const expanded = `jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_ENV: test
+      CI: 'true'
+    steps:
+      - name: Install
+        run: npm ci
+      - run: npm test
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_ENV: test
+      CI: 'true'
+    steps:
+      - name: Install
+        run: npm ci
+      - run: npm run e2e`;
+
+const matrixNames = `
+flowchart LR
+  B["build"]:::success --> T1["test (ubuntu-latest, 22)"]:::success
+  B --> T2["test (ubuntu-latest, 24)"]:::success
+  B --> T3["test (windows-latest, 22)"]:::failure
+  B --> T4["test (windows-latest, 24)"]:::failure
+  T1 --> R["report<br/>needs: test"]:::skipped
+  T2 --> R
+  T3 --> R
+  T4 --> R
+`;
+
+const ghRun = `# Runs: list, filter, follow
+gh run list --workflow ci.yml --branch main --status failure --limit 5
+gh run view 987654321                      # summary, jobs, annotations, artifacts
+gh run view 987654321 --log-failed         # only the logs of failed steps
+gh run view --job 1122334455 --log         # one job's full log
+gh run watch 987654321                     # live progress until it ends
+
+# Re-run
+gh run rerun 987654321 --failed            # failed jobs and their dependants
+gh run rerun --job 1122334455 --debug      # one job, with debug logging
+
+# Artifacts
+gh run download 987654321 --name web-dist --dir ./dist
+gh run download 987654321 --pattern 'coverage-*'
+
+# Workflows
+gh workflow list --all                     # including disabled ones
+gh workflow run deploy.yml --ref main -f target=staging -f version=v2.4.0
+gh workflow disable nightly.yml
+gh workflow enable nightly.yml`;
+
+const restRuns = `# Runs, for the repository or for one workflow (by file name or ID)
+GET /repos/{owner}/{repo}/actions/runs?branch=main&status=failure
+GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs
+
+# A run, its jobs, and its logs (a 302 redirect to a short-lived zip URL)
+GET /repos/{owner}/{repo}/actions/runs/{run_id}
+GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs
+GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs
+GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs
+
+# Artifacts: list, inspect, download (zip), delete
+GET    /repos/{owner}/{repo}/actions/artifacts?name=web-dist
+GET    /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts
+GET    /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip
+DELETE /repos/{owner}/{repo}/actions/artifacts/{artifact_id}
+
+# Re-run and cancel
+POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs
+POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel`;
+
+const templateWorkflow = `name: Octo Org CI
+
+on:
+  push:
+    branches: [$default-branch]      # replaced with the repository's default branch
+  pull_request:
+    branches: [$default-branch]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: octo-org/platform/.github/workflows/node-ci.yml@v3   # the logic stays central`;
+
+const templateProps = `{
+  "name": "Octo Org Node.js CI",
+  "description": "The organisation's standard build, test and scan for Node.js services.",
+  "iconName": "octicon package",
+  "categories": ["JavaScript", "TypeScript"],
+  "filePatterns": ["^package\\\\.json$"]
+}`;
+
+const three = `
+flowchart LR
+  TPL["Workflow template<br/>.github repo, workflow-templates/"] -->|"copied once"| WF["Your workflow<br/>.github/workflows/ci.yml"]
+  WF -->|"job level: jobs.id.uses"| RW["Reusable workflow<br/>on: workflow_call"]
+  RW -->|"step level: steps.uses"| CA["Composite action<br/>runs.using: composite"]
+`;
+---
+
+<NoteLayout
+  slug="skill-2-consume-troubleshoot"
+  description="GH-200 Skill 2, Consume and troubleshoot workflows: reading triggers from configuration and logs, diagnosing failed runs, debug logging, expanding YAML anchors, matrix job names and selective re-runs, logs and artifacts in the UI, CLI and REST API, workflow templates, reusable workflows, composite actions, and disabling versus deleting."
+  intro="Reading what a run did and why. Tracing a run back to its trigger, diagnosing failures from logs and history, expanding anchors and matrices in your head, finding logs and artifacts in the UI and the API, and choosing between workflow templates, reusable workflows and composite actions."
+>
+  <!-- ================================================================= -->
+  <h2 id="interpret-workflow-behavior">Interpret workflow behavior and results</h2>
+
+  <h3 id="identify-triggers-and-effects">Identify triggers and effects</h3>
+  <p>
+    Every run records what started it. The run summary shows <strong>Triggered via</strong> (the event — push, pull
+    request, schedule, workflow_dispatch…) and the actor; the runs list can be filtered with <code>event:</code>,
+    <code>actor:</code>, <code>branch:</code> and <code>status:</code>. Inside the run, <code>github.event_name</code>
+    and the full payload in <code>github.event</code> tell a step the same thing, and <code>run-name</code> can put it in
+    the list (<code>{'run-name: Deploy ${{ inputs.version }} by @${{ github.actor }}'}</code>).
+  </p>
+  <p>
+    When a question asks <em>whether</em> a workflow will run, walk the configuration in this order:
+  </p>
+  <Mermaid
+    code={whyNoRun}
+    caption="Why a workflow did not run. Most surprises come from the first two boxes: an event that reads the workflow from the default branch, and filters that must all match. Commit messages containing [skip ci], [ci skip], [no ci], [skip actions] or [actions skip] skip push and pull_request runs."
+  />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Event</th><th>Workflow file and <code>GITHUB_SHA</code> come from</th></tr></thead>
+      <tbody>
+        <tr><td><code>push</code></td><td>The pushed commit</td></tr>
+        <tr><td><code>pull_request</code></td><td>The PR's merge commit (<code>refs/pull/&lt;n&gt;/merge</code>); no run if the PR has merge conflicts</td></tr>
+        <tr><td><code>pull_request_target</code></td><td>The <strong>default branch</strong> (since December 2025); runs even with conflicts</td></tr>
+        <tr><td><code>schedule</code>, <code>repository_dispatch</code>, <code>workflow_run</code></td><td>The default branch</td></tr>
+        <tr><td><code>workflow_dispatch</code></td><td>The branch or tag you choose — but the button appears only once the file is on the default branch</td></tr>
+        <tr><td><code>workflow_call</code></td><td>The caller's context: <code>github</code> is the caller's, not the called workflow's</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="diagnose-failed-runs">Diagnose failed runs</h3>
+  <p>
+    Start at the <strong>run summary</strong>: the graph shows which job failed, and <strong>annotations</strong> list
+    errors and warnings with links to the step. Then open the failed job — GitHub expands the failed step for you.
+    Read <em>up</em> from the final <code>Error: Process completed with exit code …</code> line to the first real error.
+  </p>
+  <CodeBlock lang="log" title="Run npm run build" status="failure" open code={failedLog} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Symptom in the log or UI</th><th>Usual cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td><code>Resource not accessible by integration</code> (403)</td><td><code>GITHUB_TOKEN</code> lacks a scope, or a fork PR run has a read-only token</td><td>Add the scope under <code>permissions:</code>; for forks, move the write to <code>workflow_run</code></td></tr>
+        <tr><td>Job queued forever: <em>Waiting for a runner to pick up this job</em></td><td>No online runner matches all <code>runs-on</code> labels, or the group is not available to the repository</td><td>Check labels, runner group access and runner status</td></tr>
+        <tr><td><code>exit code 127</code></td><td>Command not found — the tool is not on that image or not on <code>PATH</code></td><td>Install it with a <code>setup-*</code> action, or check <code>$GITHUB_PATH</code></td></tr>
+        <tr><td><em>The job running on runner … has exceeded the maximum execution time</em></td><td><code>timeout-minutes</code> reached (default 360)</td><td>Find the hang; set a realistic timeout</td></tr>
+        <tr><td><em>Invalid workflow file</em> annotation, run fails instantly</td><td>YAML or schema error: bad indentation, unknown key, expression in a forbidden place</td><td>Lint with the VS Code extension or actionlint</td></tr>
+        <tr><td><em>Unable to resolve action</em></td><td>Typo in <code>owner/repo@ref</code>, deleted tag, private action not shared, or blocked by policy</td><td>Check the ref and the organisation's allowed-actions policy</td></tr>
+        <tr><td>A job shows as <em>skipped</em></td><td>Its <code>if:</code> was false, or a job it <code>needs</code> did not succeed</td><td>Read <code>needs.&lt;job&gt;.result</code>; add a status function if it must run</td></tr>
+        <tr><td>Step output is empty</td><td>The step has no <code>id</code>, the output was never written, or it used <code>::set-output</code></td><td>Write <code>name=value</code> to <code>$GITHUB_OUTPUT</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <CodeBlock lang="log" title="Run gh pr comment" status="failure" open code={permLog} />
+  <p>
+    <strong>Run history</strong> is the other half of diagnosis. Filter the workflow's runs by branch and status to find
+    the last green run, then compare: a different commit points at code; the same commit failing intermittently points at
+    flakiness or an external service; every workflow failing from one moment points at a runner image, a moved action
+    tag or an expired secret.
+  </p>
+
+  <h3 id="debug-logging">Debug logging</h3>
+  <ul>
+    <li><strong>Step debug logging</strong> — set a secret or variable <code>ACTIONS_STEP_DEBUG</code> to <code>true</code>. Adds <code>##[debug]</code> lines, including how each <code>if:</code> was evaluated.</li>
+    <li><strong>Runner diagnostic logging</strong> — <code>ACTIONS_RUNNER_DEBUG</code> set to <code>true</code>. Adds the runner's own diagnostic logs to the log archive.</li>
+    <li>For one attempt only, tick <strong>Enable debug logging</strong> when re-running, or pass <code>--debug</code> to <code>gh run rerun</code>.</li>
+  </ul>
+  <CodeBlock lang="log" title="Deploy (skipped)" status="skipped" code={debugLog} />
+  <p>
+    That debug trace answers "why was my step skipped?" directly: <code>github.ref</code> was a feature branch. Write
+    <code>::debug::message</code> from your own scripts to add lines that only appear when debug logging is on.
+  </p>
+
+  <h3 id="expand-yaml-anchors">Expand YAML anchors, aliases and merged mappings</h3>
+  <p>
+    The parser replaces every alias with a copy of its anchored node before anything else happens, so to analyse a
+    workflow you expand it in your head. These two files are the same workflow:
+  </p>
+  <CodeBlock file=".github/workflows/tests.yml" excerpt code={anchored} />
+  <CodeBlock lang="yaml" label="after expansion (excerpt)" code={expanded} />
+  <ul>
+    <li>An anchor can label a scalar (<code>&amp;short 10</code>), a mapping or a sequence item; the alias repeats it exactly.</li>
+    <li>An alias must come <strong>after</strong> its anchor in the file, and anchors are file-local.</li>
+    <li>A merged mapping (<code>&lt;&lt;: *base</code>) expands to the base's keys plus the local ones, local keys winning. Read it that way — and remember Actions documents only <code>&amp;</code> and <code>*</code>.</li>
+    <li>Changing the anchored value changes every alias: in the example, raising <code>&amp;short</code> lengthens both timeouts.</li>
+  </ul>
+
+  <h3 id="interpret-matrix-expansions">Interpret matrix expansions and re-run variants</h3>
+  <p>
+    A matrix job is named after its job ID and its values, in axis order: <code>test (windows-latest, 22)</code>. A
+    custom <code>name:</code> with <code>{'${{ matrix.* }}'}</code> changes that label, which is also what you select in
+    branch protection and rulesets as a <strong>required check</strong> — rename the job and the required check stops
+    matching.
+  </p>
+  <Mermaid
+    code={matrixNames}
+    variant="run"
+    caption="Both Windows legs failed and both Ubuntu legs passed: correlate the failures to the os axis, not the node axis — a platform problem (paths, line endings, shell), not a runtime one. report was skipped because a job it needs failed."
+  />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Re-run option</th><th>What runs again</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Re-run all jobs</strong></td><td>Every job in the run</td></tr>
+        <tr><td><strong>Re-run failed jobs</strong></td><td>The failed jobs, plus the jobs that depend on them</td></tr>
+        <tr><td><strong>Re-run this job</strong> (icon beside a job, including one matrix leg)</td><td>That job and its dependants — the way to retry one flaky variant</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul>
+    <li>Re-runs use the <strong>same commit and ref</strong> as the original (<code>GITHUB_SHA</code>, <code>GITHUB_REF</code>) and the <strong>privileges of the actor who triggered the original run</strong>, not of whoever re-runs it.</li>
+    <li>Possible for <strong>30 days</strong> after the run, up to <strong>50</strong> re-runs per run, and not while the workflow is disabled.</li>
+    <li>Each attempt increments <code>github.run_attempt</code>; <code>run_id</code> and <code>run_number</code> stay the same. The UI keeps every attempt's logs.</li>
+  </ul>
+
+  <!-- ================================================================= -->
+  <h2 id="access-artifacts-and-logs">Access workflow artifacts and logs</h2>
+
+  <h3 id="in-the-ui">In the UI</h3>
+  <ul>
+    <li><strong>Logs</strong>: Actions → workflow → run → job. Search the log, expand groups, view it raw, and download it — a single job, or the whole run as a zip from the run's <strong>⋯</strong> menu.</li>
+    <li><strong>Artifacts</strong>: at the bottom of the run summary, with their size; download one as a zip or delete it. Anyone with read access can download; in public repositories, any signed-in user.</li>
+    <li><strong>Job summaries</strong> and <strong>annotations</strong> sit on the run summary above the artifacts.</li>
+    <li><strong>Caches</strong> have their own page under Actions → <strong>Caches</strong>, where they can be filtered by branch and deleted.</li>
+  </ul>
+
+  <h3 id="with-the-cli-and-api">With the GitHub CLI and the REST API</h3>
+  <CodeBlock lang="bash" label="gh" code={ghRun} />
+  <CodeBlock lang="http" label="REST endpoints" code={restRuns} />
+  <Callout type="code-note" title="Log and artifact downloads are redirects">
+    <p>
+      The <code>…/logs</code> and <code>…/zip</code> endpoints answer with a <strong>302</strong> to a short-lived URL;
+      follow the redirect promptly (<code>curl -L</code>). They need read access — <code>actions: read</code> for
+      <code>GITHUB_TOKEN</code>, or a token with the Actions read permission.
+    </p>
+  </Callout>
+
+  <h3 id="download-and-manage-artifacts">Download and manage artifacts</h3>
+  <ul>
+    <li>Inside a workflow, <code>actions/download-artifact@v8</code> fetches artifacts from the <strong>same run</strong> by default; with <code>run-id</code> and a <code>github-token</code> that has <code>actions: read</code>, it can fetch from another run or repository.</li>
+    <li>Download by <code>name</code>, by <code>pattern</code> (with <code>merge-multiple</code> to flatten), by <code>artifact-ids</code>, or everything if you pass nothing.</li>
+    <li>Artifacts count towards the account's Actions storage until they expire or are deleted; deleting artifacts early is how you free storage before the retention period ends.</li>
+    <li>Expired artifacts cannot be recovered. The artifact list keeps a record that it existed.</li>
+  </ul>
+
+  <!-- ================================================================= -->
+  <h2 id="use-workflow-templates">Use and manage workflow templates</h2>
+  <Callout type="rename" title="Starter workflows are now workflow templates">
+    <p>
+      The study guide still says <strong>starter workflows</strong>; the GitHub UI and documentation say
+      <strong>workflow templates</strong>. GitHub's own collection still lives in the
+      <code>actions/starter-workflows</code> repository. Treat the two names as the same thing.
+    </p>
+  </Callout>
+
+  <h3 id="consume-templates">Consume public and organisation templates</h3>
+  <p>
+    <strong>Actions → New workflow</strong> lists templates: GitHub's own, suggested by the languages it detects in the
+    repository, and — under a heading named after your organisation — your organisation's templates. Choosing one opens
+    the file in the editor; you adapt it, then commit it to <code>.github/workflows/</code> like any other file.
+  </p>
+
+  <h3 id="organization-and-non-public-templates">Organisation and non-public templates</h3>
+  <p>
+    An organisation publishes templates from its <code>.github</code> repository, in a <code>workflow-templates/</code>
+    directory: each template is a workflow file plus a <strong>metadata file</strong> with the same base name and
+    <code>.properties.json</code>.
+  </p>
+  <CodeBlock file=".github/workflow-templates/node-ci.yml" code={templateWorkflow} />
+  <CodeBlock lang="json" file=".github/workflow-templates/node-ci.properties.json" code={templateProps} />
+  <ul>
+    <li><code>name</code> and <code>description</code> are required; <code>iconName</code> (an SVG in the same directory, or <code>octicon &lt;name&gt;</code>), <code>categories</code> and <code>filePatterns</code> (regular expressions matched against root files) are optional.</li>
+    <li><code>$default-branch</code> is replaced with the repository's default branch when the template is used.</li>
+    <li>A <strong>non-public</strong> template lives in a private or internal <code>.github</code> repository and is offered to the organisation's own repositories. Anything private it calls — a reusable workflow or an action in another private repository — must be shared through that repository's <strong>Settings → Actions → General → Access</strong>.</li>
+    <li>Anyone in the organisation with permission to create workflows in a repository can use its templates.</li>
+  </ul>
+  <Callout type="tip" title="Template plus reusable workflow">
+    <p>
+      The template above is three lines of real logic: it calls a <strong>reusable workflow</strong>. The template gets
+      teams started; the reusable workflow keeps their pipelines in step after that. That combination is the usual
+      answer when a question asks for both "easy to adopt" and "centrally maintained".
+    </p>
+  </Callout>
+
+  <h3 id="templates-reusable-workflows-composite-actions">Templates, reusable workflows and composite actions</h3>
+  <Mermaid
+    code={three}
+    caption="Three ways to share automation. A template is copied once and then forgotten; a reusable workflow is called as a job at run time; a composite action is called as a step inside any job, including the jobs of a reusable workflow."
+  />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th></th><th>Workflow template</th><th>Reusable workflow</th><th>Composite action</th></tr></thead>
+      <tbody>
+        <tr><td><strong>What it is</strong></td><td>A scaffold copied into a repository</td><td>A workflow with <code>on: workflow_call</code></td><td>An action whose <code>runs.using</code> is <code>composite</code></td></tr>
+        <tr><td><strong>Used at</strong></td><td>Creation time, once</td><td>Job level: <code>jobs.&lt;id&gt;.uses</code></td><td>Step level: <code>steps[*].uses</code></td></tr>
+        <tr><td><strong>After an update</strong></td><td>Existing copies do not change</td><td>Every caller on that ref gets it</td><td>Every caller on that ref gets it</td></tr>
+        <tr><td><strong>Can contain</strong></td><td>Anything a workflow can</td><td>Several jobs, each with its own runner, environments and services</td><td>Steps only, on the caller's runner</td></tr>
+        <tr><td><strong>Secrets</strong></td><td>—</td><td>Passed explicitly or with <code>secrets: inherit</code></td><td>Only through <code>inputs</code></td></tr>
+        <tr><td><strong>Logs show</strong></td><td>A normal workflow</td><td>Each called job separately</td><td>One step (sub-steps folded inside it)</td></tr>
+        <tr><td><strong>Choose it to</strong></td><td>Help teams start consistently</td><td>Enforce a whole pipeline centrally</td><td>Package a few steps to reuse inside jobs</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="disable-or-delete-a-workflow">Disable or delete a workflow</h3>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th></th><th>Disable</th><th>Delete</th></tr></thead>
+      <tbody>
+        <tr><td><strong>How</strong></td><td>Workflow's <strong>⋯ → Disable workflow</strong>, <code>gh workflow disable</code>, or <code>PUT …/workflows/{'{workflow_id}'}/disable</code></td><td>Remove the file from the branch (a commit), then optionally delete its runs</td></tr>
+        <tr><td><strong>File</strong></td><td>Stays in the repository, unchanged</td><td>Gone from that branch</td></tr>
+        <tr><td><strong>Triggers</strong></td><td>None fire until re-enabled; manual runs and re-runs are blocked too</td><td>None fire from that branch</td></tr>
+        <tr><td><strong>History</strong></td><td>Kept</td><td>Kept until the runs are deleted or expire; the workflow stays in the list while runs remain</td></tr>
+        <tr><td><strong>Reversible</strong></td><td>Yes — enable it again</td><td>Only by restoring the file</td></tr>
+        <tr><td><strong>Use when</strong></td><td>Pausing temporarily: an outage, a noisy schedule, an investigation</td><td>The workflow is obsolete</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul>
+    <li>GitHub disables <strong>scheduled</strong> workflows in public repositories after 60 days without repository activity; enable them again from the Actions tab.</li>
+    <li>Workflows in a <strong>fork</strong> are disabled until someone enables Actions in the fork.</li>
+    <li>Disabling Actions for the <strong>whole repository</strong> (Settings → Actions → General) is a different, broader switch.</li>
+  </ul>
+  <Callout type="exam" title="Disable beats delete when you need the history">
+    <p>
+      If a question wants to stop a workflow "temporarily", or "without losing its configuration or run history",
+      the answer is <strong>disable</strong>. Deleting the file stops it from that branch only — a branch that still has
+      the file can still trigger it — and is a code change that needs a commit and review.
+    </p>
+  </Callout>
+  <p>
+    Next: the actions themselves — <a href={href('skill-3-author-actions')}>Skill 3, Author and maintain actions</a>.
+  </p>
+</NoteLayout>

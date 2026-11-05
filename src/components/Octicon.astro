@@ -1,0 +1,33 @@
+---
+import octicons from '@primer/octicons';
+
+/**
+ * A GitHub Octicon, rendered to inline SVG at build time from the
+ * @primer/octicons package — no icon font and no runtime request.
+ *
+ * Decorative by default (aria-hidden). Pass `label` when the icon is the only
+ * thing that names a control.
+ */
+interface Props {
+  name: string;
+  size?: 12 | 16 | 20 | 24;
+  class?: string;
+  label?: string;
+}
+
+const { name, size = 16, class: className, label } = Astro.props;
+
+const icon = (octicons as Record<string, { toSVG: (opts?: Record<string, unknown>) => string }>)[name];
+if (!icon) throw new Error(`Octicon "${name}" does not exist in @primer/octicons`);
+
+// Only pass options that are set: toSVG writes `class: undefined` out literally
+// as class="undefined", dropping the "octicon" class the stylesheet relies on.
+const svg = icon.toSVG({
+  width: size,
+  height: size,
+  ...(className ? { class: className } : {}),
+  ...(label ? { 'aria-label': label } : {}),
+});
+---
+
+<Fragment set:html={svg} />

@@ -1,0 +1,59 @@
+---
+import Octicon from './Octicon.astro';
+
+/**
+ * Actions' run-status vocabulary: the status Octicons in their status colours.
+ *
+ *   success     check-circle-fill  green
+ *   failure     x-circle-fill      red
+ *   skipped     skip               grey
+ *   cancelled   stop               grey
+ *   in-progress the amber ring     amber — a spinning arc that holds still
+ *                                  under prefers-reduced-motion
+ *
+ * Used only where a status carries meaning. Colour never carries it alone: each
+ * status has its own shape, and the icon is named for assistive technology
+ * (`role="img"` + aria-label), or sits next to a visible text label.
+ */
+export type Status = 'success' | 'failure' | 'skipped' | 'cancelled' | 'in-progress';
+
+interface Props {
+  status: Status;
+  size?: 12 | 16 | 20 | 24;
+  /** Accessible name. Defaults to the status in words. Pass '' when a visible label already says it. */
+  label?: string;
+  class?: string;
+}
+
+const { status, size = 16, label, class: className } = Astro.props;
+
+const WORDS: Record<Status, string> = {
+  success: 'Succeeded',
+  failure: 'Failed',
+  skipped: 'Skipped',
+  cancelled: 'Cancelled',
+  'in-progress': 'In progress',
+};
+const ICONS: Record<Exclude<Status, 'in-progress'>, string> = {
+  success: 'check-circle-fill',
+  failure: 'x-circle-fill',
+  skipped: 'skip',
+  cancelled: 'stop',
+};
+
+const name = label ?? WORDS[status];
+const a11y = name ? { role: 'img', 'aria-label': name } : { 'aria-hidden': 'true' };
+---
+
+<span class:list={['status', `status-${status}`, className]} {...a11y}>
+  {
+    status === 'in-progress' ? (
+      <svg class="status-ring" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle class="ring-track" cx="8" cy="8" r="6" stroke-width="2" />
+        <path class="ring-arc" d="M8 2a6 6 0 0 1 6 6" stroke-width="2" stroke-linecap="round" />
+      </svg>
+    ) : (
+      <Octicon name={ICONS[status]} size={size} />
+    )
+  }
+</span>

@@ -1,0 +1,65 @@
+---
+import { SITE } from '../data/site';
+import { asset, href } from '../lib/urls';
+import Octicon from './Octicon.astro';
+import Search from './Search.astro';
+
+/**
+ * Top bar: the drawer control, the wordmark, search and the repo link — and
+ * nothing else. Styled like the GH-300 / GH-900 bar: a translucent canvas strip
+ * with a blur, the sunrise logo and GitHub-style bordered icon buttons.
+ *
+ * Page navigation lives entirely in the left rail (docked on wide screens, a
+ * drawer below 980px), so there is no tab strip or dropdown here to duplicate
+ * it and no second menu control to keep in step with it.
+ *
+ * The theme switcher is deliberately not here — it floats bottom-left with the
+ * other floating controls, which keeps the bar narrow enough for the full
+ * wordmark to fit on a phone.
+ *
+ * The wordmark comes from the page registry and is shown in full at every
+ * width — the exam code in the primary colour, "Study Notes" muted, as on the
+ * sister sites. The bar gives up padding, gaps and icon size instead.
+ */
+
+const [lead, ...rest] = SITE.name.split(' ');
+---
+
+<header class="site-header">
+  <!-- Drawer control. Hidden by CSS while the rail is docked, and always to the
+       left of the wordmark so the header's leading control never moves. -->
+  <button
+    type="button"
+    class="icon-btn sidebar-open"
+    id="sidebar-open"
+    aria-label="Open navigation"
+    aria-controls="sidebar"
+    aria-expanded="false"
+  >
+    <Octicon name="three-bars" />
+  </button>
+
+  <a class="brand" href={href('')} aria-label={`${SITE.name} — home`}>
+    <img src={asset('images/site-mark-no-bg.png')} alt="" width="32" height="32" />
+    <span class="brand-text"><span class="brand-lead">{lead}</span> <span class="brand-rest">{rest.join(' ')}</span></span>
+  </a>
+
+  <div class="header-tools">
+    <Search />
+    <!-- Styled as GitHub's own Star button. The visible label is the star emoji,
+         "on" and the GitHub mark; the emoji carries "Star", so screen readers
+         get the full phrase from aria-label on the link itself. -->
+    <a
+      class="ghub-link"
+      href={SITE.repo}
+      target="_blank"
+      rel="noopener"
+      title="Star this repository on GitHub"
+      aria-label="Star this repository on GitHub"
+    >
+      <span class="ghub-star" aria-hidden="true">⭐</span>
+      <span class="ghub-on" aria-hidden="true">on</span>
+      <Octicon name="mark-github" />
+    </a>
+  </div>
+</header>

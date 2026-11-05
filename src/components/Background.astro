@@ -1,0 +1,42 @@
+---
+import { SITE } from '../data/site';
+
+/**
+ * The sister sites' background: slowly drifting blurred clouds and a barely
+ * visible rain of tokens from the exam's own vocabulary (SITE.codeRain).
+ *
+ * Both sit behind everything (z-index: -1) at a few percent opacity, stop
+ * under prefers-reduced-motion and are hidden in print (see global.css).
+ */
+---
+
+<div class="bg-animation" aria-hidden="true">
+  <div class="cloud"></div>
+  <div class="cloud"></div>
+  <div class="cloud"></div>
+</div>
+<div class="code-rain" aria-hidden="true" data-tokens={JSON.stringify(SITE.codeRain)}></div>
+
+<script>
+  const rain = document.querySelector<HTMLElement>('.code-rain');
+  const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Readers who asked for less motion get the clouds (static) but no rain.
+  if (rain && !still) {
+    const tokens: string[] = JSON.parse(rain.dataset.tokens || '[]');
+    const columns = Math.min(48, Math.floor(window.innerWidth / 40));
+    const frag = document.createDocumentFragment();
+
+    for (let i = 0; i < columns; i++) {
+      const col = document.createElement('div');
+      col.className = 'rain-col';
+      col.style.left = `${(i / columns) * 100}%`;
+      col.style.animationDuration = `${15 + Math.random() * 20}s`;
+      col.style.animationDelay = `${-Math.random() * 20}s`;
+      const count = 8 + Math.floor(Math.random() * 12);
+      col.textContent = Array.from({ length: count }, () => tokens[Math.floor(Math.random() * tokens.length)]).join(' ');
+      frag.appendChild(col);
+    }
+    rain.appendChild(frag);
+  }
+</script>

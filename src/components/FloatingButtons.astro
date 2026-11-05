@@ -1,0 +1,74 @@
+---
+import { href } from '../lib/urls';
+import Octicon from './Octicon.astro';
+import ThemeToggle from './ThemeToggle.astro';
+
+/**
+ * Floating controls.
+ *
+ * Right stack — Back to top, and Home away from the home page — appears once
+ * the reader has scrolled past the fold, since neither is useful before that.
+ *
+ * Left — the theme switcher, which stays visible at all times: it is not tied
+ * to reading position, and keeping it out of the top bar is what leaves room
+ * for the full wordmark on a phone.
+ *
+ * Each control's aria-label doubles as its GitHub-style tooltip (see the
+ * "Floating buttons" block in global.css), so there is no title attribute to
+ * show a second, native one.
+ */
+
+interface Props {
+  /** The home page hides its own Home button, where it would be a no-op. */
+  isHome?: boolean;
+}
+
+const { isHome = false } = Astro.props;
+---
+
+<ThemeToggle />
+
+{
+  !isHome && (
+    <a class="float-btn float-home" href={href('')} aria-label="Back to the home page">
+      <Octicon name="home" />
+    </a>
+  )
+}
+
+<button type="button" class="float-btn float-top" id="back-to-top" aria-label="Back to top">
+  <Octicon name="arrow-up" />
+</button>
+
+<script>
+  const buttons = Array.from(document.querySelectorAll<HTMLElement>('.float-btn'));
+  const top = document.getElementById('back-to-top');
+
+  top?.addEventListener('click', () => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({ top: 0, behavior: reduced ? 'auto' : 'smooth' });
+    // Move focus for keyboard users, but with preventScroll: focusing an element
+    // triggers a scroll-into-view that would cancel the smooth scroll above and
+    // leave the page stranded part-way up.
+    document.querySelector<HTMLElement>('.site-header .brand')?.focus({ preventScroll: true });
+  });
+
+  // Both buttons appear together once the reader has scrolled past the fold.
+  let ticking = false;
+  function update() {
+    const show = window.scrollY > 520;
+    buttons.forEach((b) => b.classList.toggle('show', show));
+    ticking = false;
+  }
+  window.addEventListener(
+    'scroll',
+    () => {
+      if (!ticking) {
+        ticking = true;
+        requestAnimationFrame(update);
+      }
+    },
+    { passive: true },
+  );
+  update();
+</script>

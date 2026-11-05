@@ -1,0 +1,102 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import OnThisPage from '../components/OnThisPage.astro';
+import Pager from '../components/Pager.astro';
+import RunSummary, { type Cell } from '../components/RunSummary.astro';
+import Sidebar from '../components/Sidebar.astro';
+import { SITE, pageBySlug } from '../data/site';
+import { absolute, href } from '../lib/urls';
+
+interface Props {
+  slug: string;
+  /** Browser/tab title. Defaults to "<label> — GH-200 Study Notes". */
+  title?: string;
+  description: string;
+  /** Page heading. Defaults to the label in the page registry. */
+  heading?: string;
+  /** Standfirst under the heading. */
+  intro: string;
+  themeColor?: string;
+}
+
+const { slug, title, description, heading, intro, themeColor } = Astro.props;
+
+const page = pageBySlug(slug);
+if (!page) throw new Error(`NoteLayout: "${slug}" is not registered in src/data/site.ts`);
+
+const docTitle = title ?? `${page.label} — ${SITE.name}`;
+
+// The body is rendered first so the run-summary strip can count its sections
+// from the headings that are actually on the page — the same reason the
+// "On this page" outline is built from the rendered headings.
+const body = await Astro.slots.render('default');
+const sections = (body.match(/<h2[\s>]/g) ?? []).length;
+
+// Modelled on the top of an Actions run summary. Skill, weighting and
+// revision all come from the page registry.
+const cells: Cell[] = page.skill
+  ? [
+      { label: 'Skill', value: page.skill, icon: page.icon },
+      { label: 'Exam weight', value: page.weight ?? '' },
+      { label: 'Skills measured', value: SITE.skillsMeasured },
+      { label: 'Sections', value: sections },
+    ]
+  : [
+      { label: 'Page', value: page.badge, icon: page.icon },
+      { label: 'Exam', value: SITE.exam },
+      { label: 'Skills measured', value: SITE.skillsMeasured },
+      { label: 'Sections', value: sections },
+    ];
+
+const schema = [
+  {
+    '@type': 'TechArticle',
+    '@id': `${absolute(SITE.origin, slug)}#article`,
+    headline: heading ?? page.label,
+    description,
+    url: absolute(SITE.origin, slug),
+    inLanguage: 'en',
+    isPartOf: { '@id': `${absolute(SITE.origin, '')}#website` },
+    author: { '@id': `${SITE.origin}/#person` },
+    about: `Exam ${SITE.exam}: ${SITE.examTitle}`,
+  },
+];
+---
+
+<BaseLayout
+  title={docTitle}
+  description={description}
+  slug={slug}
+  themeColor={themeColor}
+  ogType="article"
+  schema={schema}
+>
+  <div class="layout" data-sidebar="expanded" data-drawer="closed">
+    <Sidebar current={slug} />
+
+    {/* .page is an inner grid so the outline can sit beside the prose on wide
+        screens and drop between the title and the body on narrow ones, without
+        the element existing twice in the DOM. */}
+    <main class="page" id="main" style={`--accent:${page.accent}`}>
+      <header class="page-head">
+        {/* A repository-path style breadcrumb, as on the sister sites. */}
+        <nav class="breadcrumb" aria-label="Breadcrumb">
+          <a href={href('')}>Home</a>
+          <span class="sep" aria-hidden="true">/</span>
+          <span aria-current="page">{page.navLabel}</span>
+        </nav>
+        <h1>{heading ?? page.label}</h1>
+        <p class="lead">{intro}</p>
+        {/* States the revision on every page, so a reader can tell at a glance
+            whether the notes have gone stale against the official study guide. */}
+        <RunSummary cells={cells} />
+      </header>
+
+      <OnThisPage />
+
+      <div class="content" set:html={body} />
+
+      <Pager current={slug} />
+    </main>
+  </div>
+</BaseLayout>

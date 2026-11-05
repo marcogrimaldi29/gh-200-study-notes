@@ -1,0 +1,977 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import { SITE } from '../../data/site';
+import { href } from '../../lib/urls';
+
+/* ---------- Triggers ---------- */
+
+const whichTrigger = `
+flowchart TD
+  Q["What should start the run?"]
+  Q --> A1["Code or PR activity"] --> T1["push · pull_request<br/>with branches, paths, types"]
+  Q --> A2["A clock"] --> T2["schedule<br/>cron, UTC unless timezone is set"]
+  Q --> A3["A person, on demand"] --> T3["workflow_dispatch<br/>typed inputs, Run workflow button"]
+  Q --> A4["Another system"] --> T4["repository_dispatch<br/>event_type and client_payload"]
+  Q --> A5["Another workflow, as a job"] --> T5["workflow_call<br/>inputs, secrets, outputs"]
+  Q --> A6["Another workflow finishing"] --> T6["workflow_run<br/>types: completed"]
+`;
+
+const triggers = `on:
+  push:
+    branches: [main, 'release/**']
+    tags: ['v*']
+    paths-ignore: ['docs/**', '**.md']
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+  schedule:
+    - cron: '30 5 * * 1-5'          # 05:30 on weekdays
+      timezone: 'Europe/Madrid'     # optional; UTC without it
+  issues:
+    types: [labeled]
+  release:
+    types: [published]`;
+
+const dispatch = `name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Where to deploy
+        type: environment          # a dropdown of the repository's environments
+        required: true
+      version:
+        description: Release tag, e.g. v2.4.0
+        type: string
+        required: true
+      replicas:
+        type: number
+        default: 2
+      dry-run:
+        type: boolean
+        default: true
+      region:
+        type: choice
+        options: [eu-west, us-east, ap-south]
+        default: eu-west
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: \${{ inputs.target }}
+    steps:
+      - name: Show the request
+        env:
+          VERSION: \${{ inputs.version }}
+          DRY_RUN: \${{ inputs.dry-run }}
+        run: echo "Deploying $VERSION, dry run $DRY_RUN"`;
+
+const called = `name: Reusable build
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string               # boolean, number or string only
+        default: '24'
+      run-e2e:
+        type: boolean
+        default: false
+    secrets:
+      npm_token:
+        required: true
+    outputs:
+      image-tag:
+        description: Tag of the image that was built
+        value: \${{ jobs.build.outputs.tag }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: \${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: \${{ inputs.node-version }}
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.npm_token }}
+      - id: meta
+        run: echo "tag=sha-\${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"`;
+
+const caller = `name: CI
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: octo-org/platform/.github/workflows/build.yml@v3
+    with:
+      node-version: '24'
+      run-e2e: true
+    secrets:
+      npm_token: \${{ secrets.NPM_TOKEN }}   # or: secrets: inherit
+
+  report:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Built \${{ needs.build.outputs.image-tag }}"`;
+
+const repoDispatch = `gh api repos/octo-org/web/dispatches \\
+  -f event_type=deploy-requested \\
+  -F 'client_payload[env]=staging' \\
+  -F 'client_payload[sha]=1f2e3d4'`;
+
+const repoDispatchOn = `on:
+  repository_dispatch:
+    types: [deploy-requested]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TARGET: \${{ github.event.client_payload.env }}
+        run: echo "Deploying to $TARGET"`;
+
+/* ---------- Structure ---------- */
+
+const conditions = `jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v7
+      - id: unit
+        run: npm test
+        continue-on-error: true          # the step "fails" but the job carries on
+
+      - name: Only on main pushes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: ./scripts/publish-preview.sh
+
+      - name: Tell us when unit tests failed
+        if: steps.unit.outcome == 'failure'   # outcome: before continue-on-error
+        run: echo "::warning::Unit tests failed"
+
+      - name: Always clean up
+        if: always()
+        run: ./scripts/cleanup.sh
+
+      - name: Only when an earlier step failed
+        if: failure()
+        run: ./scripts/collect-diagnostics.sh`;
+
+const graph = `
+flowchart LR
+  LINT["lint"]:::success --> BUILD["build"]:::success
+  TEST["test"]:::failure --> DEPLOY["deploy<br/>needs: build, test"]:::skipped
+  BUILD --> DEPLOY
+  DEPLOY --> NOTIFY["notify<br/>if: always()"]:::success
+`;
+
+const needsYaml = `jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps: [{ run: npm run lint }]
+  build:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps: [{ run: npm run build }]
+  test:
+    runs-on: ubuntu-latest
+    steps: [{ run: npm test }]
+  deploy:
+    needs: [build, test]               # skipped if either does not succeed
+    runs-on: ubuntu-latest
+    steps: [{ run: ./deploy.sh }]
+  notify:
+    needs: deploy
+    if: \${{ always() }}                 # runs even though deploy was skipped
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "deploy result was \${{ needs.deploy.result }}"`;
+
+const envFiles = `steps:
+  - name: Set values for later steps
+    run: |
+      echo "BUILD_ID=$(date +%s)" >> "$GITHUB_ENV"       # env var for later steps
+      echo "$HOME/.local/bin" >> "$GITHUB_PATH"            # prepend to PATH
+      {
+        echo 'NOTES<<EOF'                                  # multiline value
+        git log -3 --oneline
+        echo 'EOF'
+      } >> "$GITHUB_ENV"
+
+  - name: Use them
+    run: |
+      echo "Build $BUILD_ID"
+      echo "$NOTES"`;
+
+const commandsLog = `::group::Install dependencies
+added 812 packages in 14s
+::endgroup::
+::group::Run unit tests
+PASS src/cart.test.ts
+FAIL src/checkout.test.ts
+::endgroup::
+::error file=src/checkout.ts,line=42,col=7::Expected total to be 30, received 3
+::warning::Coverage dropped below 80% (78.4%)
+::notice title=Preview::Deployed to https://pr-1287.preview.example.com
+Using token *** for the registry
+Error: Process completed with exit code 1.`;
+
+const commandsShell = `echo "::group::Install dependencies"
+npm ci
+echo "::endgroup::"
+
+echo "::error file=src/checkout.ts,line=42,col=7::Expected total to be 30, received 3"
+echo "::warning::Coverage dropped below 80% (78.4%)"
+echo "::notice title=Preview::Deployed to $PREVIEW_URL"
+
+TOKEN=$(./scripts/fetch-token.sh)
+echo "::add-mask::$TOKEN"          # mask a value that is not a secret
+echo "::debug::only shown when step debug logging is on"`;
+
+const services = `jobs:
+  integration:
+    runs-on: ubuntu-latest           # service containers need a Linux runner
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432                # host:container — needed when the job is on the runner
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:8
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm ci && npm run test:integration
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          REDIS_URL: redis://localhost:6379`;
+
+const servicesContainer = `jobs:
+  integration:
+    runs-on: ubuntu-latest
+    container: node:24               # the job itself runs in a container…
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm ci && npm run test:integration
+        env:
+          # …so services are reached by their label on the job's network
+          DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres`;
+
+const matrix = `jobs:
+  test:
+    name: test (\${{ matrix.os }}, node \${{ matrix.node }})
+    runs-on: \${{ matrix.os }}
+    strategy:
+      fail-fast: false               # default true: one failure cancels the rest
+      max-parallel: 4
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22, 24]
+        exclude:
+          - os: macos-latest
+            node: 22                   # drop one combination
+        include:
+          - os: ubuntu-latest
+            node: 26
+            experimental: true         # add a combination with an extra key
+          - os: windows-latest
+            node: 24
+            npm-flags: --no-audit      # add a key to an existing combination
+    continue-on-error: \${{ matrix.experimental == true }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: \${{ matrix.node }}
+      - run: npm ci \${{ matrix.npm-flags }}
+      - run: npm test`;
+
+const matrixGraph = `
+flowchart LR
+  A["test (ubuntu-latest, node 22)"]:::success --> P["publish<br/>needs: test"]:::skipped
+  B["test (windows-latest, node 24)"]:::failure --> P
+  C["test (macos-latest, node 24)"]:::success --> P
+  D["test (ubuntu-latest, node 26)"]:::success --> P
+`;
+
+const anchors = `jobs:
+  test:
+    runs-on: ubuntu-latest
+    env: &shared-env                 # anchor: name this mapping
+      NODE_ENV: test
+      TZ: UTC
+    steps:
+      - &checkout                    # anchor a whole step
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: npm test
+
+  lint:
+    runs-on: ubuntu-latest
+    env: *shared-env                 # alias: the same mapping again
+    steps:
+      - *checkout                    # the same step again
+      - run: npm run lint`;
+
+const mergeKey = `# YAML merge keys: valid YAML 1.1, not documented for GitHub Actions
+base: &base
+  runs-on: ubuntu-latest
+  timeout-minutes: 10
+
+lint:
+  <<: *base                # copy every key of the base mapping…
+  timeout-minutes: 5       # …then override one (local keys win)`;
+
+/* ---------- Expressions ---------- */
+
+const expressions = `- name: Expressions, one per variable
+  if: \${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+  env:
+    # Literals: numbers, booleans, null, and single-quoted strings ('' escapes ')
+    ANSWER: \${{ 42 }}
+    QUOTE: \${{ 'it''s' }}
+    # Operators
+    RELEASE: \${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+    # Functions — the object filter * collects a property from every item
+    WANTS_DEPLOY: \${{ contains(github.event.pull_request.labels.*.name, 'deploy') }}
+    CACHE_KEY: \${{ format('{0}-{1}', runner.os, hashFiles('**/package-lock.json')) }}
+    TARGETS: \${{ join(github.event.pull_request.labels.*.name, ', ') }}
+    COMMIT_JSON: \${{ toJSON(github.event.pull_request.head) }}
+    # A "ternary": cond && a || b — b wins whenever a is falsy
+    STAGE: \${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+  run: echo "$STAGE $CACHE_KEY"`;
+
+const leak = `steps:
+  - name: Wrong — secret pasted into the script, and leaked by a transform
+    run: |
+      curl -H "Authorization: Bearer \${{ secrets.API_TOKEN }}" https://api.example.com
+      echo "\${{ secrets.API_TOKEN }}" | base64      # the base64 form is NOT masked
+
+  - name: Right — secret passed as an environment variable
+    env:
+      API_TOKEN: \${{ secrets.API_TOKEN }}
+    run: |
+      curl -H "Authorization: Bearer $API_TOKEN" https://api.example.com
+
+  - name: Gate on a secret being present (secrets cannot be used in if:)
+    if: env.HAS_TOKEN == 'true'
+    env:
+      HAS_TOKEN: \${{ secrets.API_TOKEN != '' }}
+    run: ./scripts/publish.sh`;
+
+/* ---------- Execution and outputs ---------- */
+
+const cache = `steps:
+  - uses: actions/checkout@v7
+  - uses: actions/cache@v6
+    id: cache
+    with:
+      path: ~/.npm
+      key: npm-\${{ runner.os }}-\${{ hashFiles('**/package-lock.json') }}
+      restore-keys: |
+        npm-\${{ runner.os }}-
+  - if: steps.cache.outputs.cache-hit != 'true'
+    run: echo "No exact match — restored from a prefix, or nothing"
+  - run: npm ci
+
+  # Or let the setup action do it:
+  - uses: actions/setup-node@v7
+    with:
+      node-version: 24
+      cache: npm                       # keys on the lockfile automatically`;
+
+const artifacts = `jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm ci && npm run build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: |
+            dist/
+            !dist/**/*.map
+          retention-days: 5            # within the repository's maximum
+          if-no-files-found: error
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: dist`;
+
+const retention = `# Read, then set, the default retention (days) for artifacts and logs
+gh api repos/octo-org/web/actions/permissions/artifact-and-log-retention
+gh api -X PUT repos/octo-org/web/actions/permissions/artifact-and-log-retention -F days=30
+
+# The same at organisation level (repositories cannot exceed it)
+gh api -X PUT orgs/octo-org/actions/permissions/artifact-and-log-retention -F days=60
+
+# Clean up ahead of retention: one artifact, one run's logs, one whole run
+gh api -X DELETE repos/octo-org/web/actions/artifacts/1234567
+gh api -X DELETE repos/octo-org/web/actions/runs/987654321/logs
+gh api -X DELETE repos/octo-org/web/actions/runs/987654321`;
+
+const outputs = `jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:                                     # 2 · publish as job outputs
+      version: \${{ steps.ver.outputs.version }}
+      targets: \${{ steps.ver.outputs.targets }}
+    steps:
+      - id: ver                                  # 1 · a step writes outputs
+        run: |
+          echo "version=2.4.0" >> "$GITHUB_OUTPUT"
+          echo 'targets=["eu","us"]' >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: plan                                  # 3 · read them through needs
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        region: \${{ fromJSON(needs.plan.outputs.targets) }}
+    steps:
+      - run: echo "Releasing \${{ needs.plan.outputs.version }} to \${{ matrix.region }}"`;
+
+const dataFlow = `
+flowchart LR
+  subgraph J1["Job: plan"]
+    direction TB
+    S1["Step writes<br/>GITHUB_OUTPUT"] --> S2["steps.id.outputs"]
+  end
+  S2 --> JO["jobs.plan.outputs"]
+  JO --> N["needs.plan.outputs<br/>in later jobs"]
+  N --> WO["on.workflow_call.outputs<br/>back to a caller"]
+`;
+
+const summary = `- name: Publish a job summary
+  if: always()
+  run: |
+    {
+      echo "## Test results :white_check_mark:"
+      echo ""
+      echo "| Suite | Passed | Failed |"
+      echo "| ----- | -----: | -----: |"
+      echo "| unit  | 412    | 0      |"
+      echo "| e2e   | 37     | 1      |"
+      echo ""
+      echo "Coverage: **84.1%** · [Full report]($REPORT_URL)"
+    } >> "$GITHUB_STEP_SUMMARY"`;
+
+const badge = `![CI](https://github.com/octo-org/web/actions/workflows/ci.yml/badge.svg)
+![CI on main](https://github.com/octo-org/web/actions/workflows/ci.yml/badge.svg?branch=main)
+![CI for pushes](https://github.com/octo-org/web/actions/workflows/ci.yml/badge.svg?event=push)`;
+
+const envJob = `jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: \${{ steps.deploy.outputs.url }}   # shown on the run graph and in Deployments
+    concurrency:
+      group: production
+      queue: max                             # deployments wait in line, none are dropped
+    steps:
+      - id: deploy
+        env:
+          DEPLOY_KEY: \${{ secrets.DEPLOY_KEY }}   # an environment secret
+          API_URL: \${{ vars.API_URL }}           # an environment variable
+        run: ./deploy.sh`;
+---
+
+<NoteLayout
+  slug="skill-1-author-workflows"
+  description="GH-200 Skill 1, Author and manage workflows: triggers and workflow_dispatch and workflow_call inputs, jobs, conditions, needs, service containers, matrices, YAML anchors, contexts, expressions, editor tooling, caching, artifacts, retention APIs, outputs, environment files, job summaries, badges and environment protections."
+  intro="The heaviest skill on the exam. Choosing the right trigger and scope, structuring jobs and steps with conditions, dependencies, services and matrices, reading contexts and expressions correctly, and moving data and results through a run with caches, artifacts, outputs, environment files and job summaries."
+>
+  <!-- ================================================================= -->
+  <h2 id="configure-triggers-and-events">Configure workflow triggers and events</h2>
+  <p>
+    The <code>on:</code> key decides when a workflow runs. It accepts a single event, a list, or a map of events with
+    <strong>activity types</strong> and <strong>filters</strong>. A workflow runs once per matching event — two matching
+    events mean two runs.
+  </p>
+  <Mermaid
+    code={whichTrigger}
+    caption="Pick the trigger by what starts the work. workflow_call is used by another workflow at job level; workflow_run fires after another workflow finishes and runs with this repository's privileges."
+  />
+
+  <h3 id="repository-events-and-filters">Repository events and filters</h3>
+  <CodeBlock file=".github/workflows/triggers.yml" excerpt code={triggers} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Filter</th><th>Applies to</th><th>Rule to remember</th></tr></thead>
+      <tbody>
+        <tr><td><code>branches</code> / <code>branches-ignore</code></td><td><code>push</code>, <code>pull_request</code>, <code>pull_request_target</code>, <code>workflow_run</code></td><td>Use one or the other for the same event, not both; use <code>!pattern</code> inside <code>branches</code> to exclude</td></tr>
+        <tr><td><code>tags</code> / <code>tags-ignore</code></td><td><code>push</code></td><td>Pushing more than three tags at once creates no event</td></tr>
+        <tr><td><code>paths</code> / <code>paths-ignore</code></td><td><code>push</code>, <code>pull_request</code></td><td>With <code>branches</code>, <strong>both</strong> must match; order matters for <code>!</code> patterns</td></tr>
+        <tr><td><code>types</code></td><td>Events with activity types</td><td><code>pull_request</code> defaults to <code>opened</code>, <code>synchronize</code>, <code>reopened</code> — add <code>ready_for_review</code> or <code>labeled</code> explicitly</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Glob patterns use <code>*</code> (no <code>/</code>), <code>**</code> (any depth), <code>?</code>, <code>+</code>
+    and <code>[]</code>. A branch filter on <code>pull_request</code> matches the <strong>base</strong> branch of the pull
+    request, not the head.
+  </p>
+
+  <h3 id="scheduled-workflows">Scheduled workflows</h3>
+  <ul>
+    <li>POSIX cron with five fields — minute, hour, day of month, month, day of week — and <code>*</code>, <code>,</code>, <code>-</code>, <code>/</code>. Shorthand such as <code>@daily</code> is not supported.</li>
+    <li><strong>UTC</strong> by default; an optional <code>timezone</code> key takes an IANA zone name.</li>
+    <li>The shortest interval is <strong>every 5 minutes</strong>, and runs can be delayed — or dropped — under load, especially at the top of the hour. Pick an odd minute.</li>
+    <li>Runs on the <strong>latest commit of the default branch</strong> only.</li>
+    <li>In public repositories, scheduled workflows are <strong>disabled after 60 days</strong> without repository activity.</li>
+  </ul>
+
+  <h3 id="manual-runs-with-workflow-dispatch">Manual runs with workflow_dispatch</h3>
+  <p>
+    <code>workflow_dispatch</code> adds a <strong>Run workflow</strong> button to the Actions tab — but only once the file
+    is on the <strong>default branch</strong>. It can also be started with <code>gh workflow run</code> or the REST API,
+    against any branch or tag.
+  </p>
+  <CodeBlock file=".github/workflows/deploy.yml" code={dispatch} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Input key</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>type</code></td><td><code>string</code>, <code>boolean</code>, <code>number</code>, <code>choice</code> (with <code>options</code>) or <code>environment</code></td></tr>
+        <tr><td><code>required</code></td><td>The form and the API refuse a run without it</td></tr>
+        <tr><td><code>default</code></td><td>Used when the input is omitted; must be one of <code>options</code> for a choice</td></tr>
+        <tr><td><code>description</code></td><td>Shown in the form</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <Callout type="exam" title="inputs versus github.event.inputs">
+    <p>
+      Read inputs from the <code>inputs</code> context. A <code>boolean</code> input is a real boolean there, but a
+      <strong>string</strong> in <code>github.event.inputs</code> — so <code>{"if: github.event.inputs.dry-run"}</code> is
+      always truthy (<code>'false'</code> is a non-empty string). A workflow can declare up to <strong>25 inputs</strong>,
+      with a 65,535-character payload limit.
+    </p>
+  </Callout>
+
+  <h3 id="reusable-workflows-with-workflow-call">Reusable workflows with workflow_call</h3>
+  <p>
+    A workflow with <code>on: workflow_call</code> is called as a <strong>job</strong>, with
+    <code>jobs.&lt;id&gt;.uses</code>. The called workflow declares its <code>inputs</code> (types
+    <code>boolean</code>, <code>number</code> or <code>string</code> — no <code>choice</code>), its
+    <code>secrets</code> and its <code>outputs</code>; the caller maps values into them.
+  </p>
+  <CodeBlock file="octo-org/platform: .github/workflows/build.yml" code={called} />
+  <CodeBlock file=".github/workflows/ci.yml" code={caller} />
+  <ul>
+    <li>Reference a reusable workflow as <code>owner/repo/.github/workflows/file.yml@ref</code>, or <code>./.github/workflows/file.yml</code> in the same repository (same commit, no <code>@ref</code>).</li>
+    <li>Secrets are <strong>not</strong> passed implicitly. Map each one under <code>secrets:</code>, or pass <code>secrets: inherit</code> to hand over every secret the caller can see (same organisation or enterprise only).</li>
+    <li>The caller's <code>env</code> context is <strong>not propagated</strong>; use inputs.</li>
+    <li>A calling job can only use <code>with</code>, <code>secrets</code>, <code>needs</code>, <code>if</code>, <code>permissions</code>, <code>concurrency</code> and <code>strategy</code> — no <code>steps</code> and no <code>runs-on</code>.</li>
+    <li>The called workflow can keep or <strong>reduce</strong> the <code>GITHUB_TOKEN</code> permissions it receives, never raise them.</li>
+    <li>Up to <strong>ten levels</strong> of nesting, and at most <strong>50 unique reusable workflows</strong> from one workflow file (both raised in November 2025 from four and 20).</li>
+  </ul>
+
+  <h3 id="external-events-with-repository-dispatch">External events with repository_dispatch</h3>
+  <p>
+    Another system starts a workflow by calling the REST API with an <code>event_type</code> (up to 100 characters) and
+    an optional <code>client_payload</code> (up to 10 top-level properties). The workflow must be on the default branch.
+  </p>
+  <CodeBlock lang="bash" label="shell" code={repoDispatch} />
+  <CodeBlock file=".github/workflows/deploy-requested.yml" excerpt code={repoDispatchOn} />
+
+  <h3 id="choose-scope-permissions-and-events">Choose scope, permissions and events</h3>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Situation</th><th>Choose</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Test code from forks</td><td><code>pull_request</code></td><td>Runs the fork's code with a read-only token and no secrets</td></tr>
+        <tr><td>Label or comment on a fork's PR</td><td><code>pull_request_target</code>, without checking out the PR</td><td>Runs the default branch's workflow with base-repository secrets — never execute the PR's code there</td></tr>
+        <tr><td>Run privileged work after untrusted CI</td><td><code>workflow_run</code> on <code>completed</code></td><td>Runs in the base repository; check <code>github.event.workflow_run.conclusion</code></td></tr>
+        <tr><td>Let a workflow start another</td><td><code>workflow_dispatch</code> or <code>repository_dispatch</code></td><td>Events created with <code>GITHUB_TOKEN</code> do not start new runs, except these two</td></tr>
+        <tr><td>Only one job needs to write</td><td>Top-level <code>permissions: contents: read</code>, raise in that job only</td><td>Least privilege per job</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <Callout type="caution" title="GITHUB_TOKEN does not trigger workflows">
+    <p>
+      A push, tag or release created with <code>GITHUB_TOKEN</code> starts <strong>no</strong> new workflow run — that is
+      what stops a workflow triggering itself forever. Only <code>workflow_dispatch</code> and
+      <code>repository_dispatch</code> are exempt. If a release workflow must trigger a publish workflow, use a GitHub App
+      token or call <code>workflow_dispatch</code>. Pull requests opened by <code>GITHUB_TOKEN</code> do get runs, but
+      they wait for approval from someone with write access.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="design-workflow-structure">Design and implement workflow structure</h2>
+
+  <h3 id="jobs-steps-and-conditions">Jobs, steps and conditional logic</h3>
+  <CodeBlock file=".github/workflows/test.yml" excerpt code={conditions} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Status function</th><th>True when</th></tr></thead>
+      <tbody>
+        <tr><td><code>success()</code></td><td>Nothing before it failed or was cancelled — the implicit default of every <code>if:</code></td></tr>
+        <tr><td><code>failure()</code></td><td>A previous step (or, at job level, an ancestor job) failed</td></tr>
+        <tr><td><code>cancelled()</code></td><td>The run was cancelled</td></tr>
+        <tr><td><code>always()</code></td><td>Always — even after cancellation; prefer <code>{"!cancelled()"}</code> for clean-up that should not delay a cancel</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul>
+    <li>An <code>if:</code> without a status function gets <code>success() &amp;&amp;</code> prepended — so <code>if: github.ref == 'refs/heads/main'</code> does not run after a failure.</li>
+    <li><code>{'${{ }}'}</code> is optional in <code>if:</code>, except when the expression starts with <code>!</code> — YAML would read that as a tag, so write <code>{"if: ${{ !cancelled() }}"}</code>.</li>
+    <li><code>steps.&lt;id&gt;.outcome</code> is the result <em>before</em> <code>continue-on-error</code>; <code>conclusion</code> is after it. A failed step with <code>continue-on-error: true</code> has outcome <code>failure</code>, conclusion <code>success</code>.</li>
+    <li><code>timeout-minutes</code> defaults to <strong>360</strong> for a job; set it lower to stop hung jobs burning minutes. Steps take it too.</li>
+    <li><code>defaults.run</code> sets <code>shell</code> and <code>working-directory</code> for <code>run</code> steps at workflow or job level — not for <code>uses</code> steps.</li>
+  </ul>
+
+  <h3 id="dependencies-between-jobs">Dependencies between jobs</h3>
+  <Mermaid
+    code={graph}
+    variant="run"
+    caption="lint → build succeeded, test failed, so deploy (needs: build, test) was skipped — shown dashed. notify needs deploy but has if: always(), so it still ran. needs.deploy.result reads 'skipped'."
+  />
+  <CodeBlock file=".github/workflows/pipeline.yml" excerpt code={needsYaml} />
+  <p>
+    A job runs only when every job in its <code>needs</code> succeeded, unless its <code>if:</code> uses a status
+    function. A skipped job counts as not-succeeded for its dependants, so skips <strong>propagate</strong> down the
+    chain. <code>needs.&lt;job&gt;.result</code> is <code>success</code>, <code>failure</code>, <code>cancelled</code> or
+    <code>skipped</code>.
+  </p>
+
+  <h3 id="workflow-commands-and-environment-variables">Workflow commands and environment variables</h3>
+  <p>
+    Variables set with <code>env:</code> at workflow, job or step level are visible to steps; the <strong>most specific
+    wins</strong> (step over job over workflow). The runner also sets default variables —
+    <code>GITHUB_SHA</code>, <code>GITHUB_REF</code>, <code>GITHUB_REPOSITORY</code>, <code>GITHUB_WORKSPACE</code>,
+    <code>RUNNER_OS</code>, <code>RUNNER_TEMP</code> and more — which you cannot overwrite (names starting
+    <code>GITHUB_</code> are reserved). The full list is in the
+    <a href={`${href('syntax-reference')}#default-environment-variables`}>Syntax reference</a>.
+  </p>
+  <p>
+    Steps talk to the runner in two ways: <strong>environment files</strong>, written with <code>&gt;&gt;</code>, and
+    <strong>workflow commands</strong>, printed to standard output as <code>::command parameters::value</code>.
+  </p>
+  <CodeBlock file=".github/workflows/env.yml" excerpt code={envFiles} />
+  <CodeBlock lang="bash" label="workflow commands" code={commandsShell} />
+  <p>And what those commands look like in the job log:</p>
+  <CodeBlock lang="log" title="Run npm test" status="failure" open code={commandsLog} />
+  <Callout type="code-note" title="Environment files are per step">
+    <p>
+      A value written to <code>$GITHUB_ENV</code> is visible to the <strong>following</strong> steps of the same job, not
+      to the step that wrote it, and not to other jobs. Use <code>$GITHUB_OUTPUT</code> plus job outputs to cross a job
+      boundary. Multiline values use the <code>NAME&lt;&lt;DELIMITER</code> form; pick a delimiter that cannot appear in
+      the value.
+    </p>
+  </Callout>
+
+  <h3 id="service-containers">Service containers</h3>
+  <p>
+    <code>services:</code> starts Docker containers — databases, caches, queues — alongside a job, and tears them down
+    when it ends. They need a <strong>Linux</strong> runner (GitHub-hosted Ubuntu, or a self-hosted Linux runner with
+    Docker). How you reach them depends on where the job runs:
+  </p>
+  <CodeBlock file=".github/workflows/integration.yml" excerpt code={services} />
+  <CodeBlock file=".github/workflows/integration-container.yml" excerpt code={servicesContainer} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Job runs…</th><th>Reach the service at</th><th>Ports</th></tr></thead>
+      <tbody>
+        <tr><td>Directly on the runner</td><td><code>localhost:&lt;mapped port&gt;</code></td><td>Map them with <code>ports:</code></td></tr>
+        <tr><td>In a <code>container:</code></td><td>The service <strong>label</strong> as hostname, e.g. <code>postgres:5432</code></td><td>No mapping needed — they share a Docker network</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    <code>options:</code> passes Docker <code>create</code> flags; health checks (<code>--health-cmd</code>,
+    <code>--health-interval</code>, <code>--health-retries</code>) make the runner <strong>wait until the service is
+    healthy</strong> before the first step. <code>credentials:</code> pulls from a private registry, and the mapped host
+    port is available as <code>{'${{ job.services.postgres.ports[5432] }}'}</code> when you map to a random port.
+  </p>
+
+  <h3 id="strategy-and-matrix">Strategy and matrix</h3>
+  <CodeBlock file=".github/workflows/matrix.yml" excerpt code={matrix} />
+  <Mermaid
+    code={matrixGraph}
+    variant="run"
+    caption="Four of the matrix's six jobs are drawn; the other two follow the same pattern. fail-fast: false let the other legs finish after windows/node 24 failed; publish was skipped because one leg of the matrix it needs failed. With fail-fast: true, the running legs would have been cancelled."
+  />
+  <ul>
+    <li>The matrix is the <strong>cartesian product</strong> of its axes; <code>exclude</code> is applied first, then <code>include</code>.</li>
+    <li><code>include</code> adds keys to every existing combination it fully matches without overwriting an original value; if it matches none, it adds a new combination.</li>
+    <li>A matrix can generate up to <strong>256 jobs</strong> per workflow run.</li>
+    <li><code>fail-fast</code> (default <code>true</code>) cancels in-progress and queued legs when one fails; <code>max-parallel</code> caps how many run at once.</li>
+    <li><code>continue-on-error</code> at job level lets an experimental leg fail without failing the run.</li>
+    <li>A matrix can be built at runtime: output JSON from an earlier job and use <code>{'${{ fromJSON(needs.plan.outputs.matrix) }}'}</code>.</li>
+  </ul>
+  <Callout type="tip" title="Size the matrix for cost and signal">
+    <p>
+      Every leg is a billed job. Test the full product on the default branch, and a smaller matrix on pull requests;
+      exclude combinations you do not ship; put the slowest legs on Linux, which bills at the lowest rate; and use
+      <code>max-parallel</code> to stay inside your concurrency limits rather than queue.
+    </p>
+  </Callout>
+  <Callout type="warn" title={`Runner labels move — checked ${SITE.checked}`}>
+    <p>
+      <code>ubuntu-20.04</code> was retired in April 2025 and <code>windows-2019</code> in June 2025; jobs that ask for
+      them never find a runner. <code>windows-latest</code> moved to <strong>Windows Server 2025</strong> in September
+      2025, and <code>ubuntu-latest</code> is moving to <strong>Ubuntu 26.04</strong> between 19 October and 19 November
+      2026. A matrix on <code>-latest</code> labels can change tool versions under you overnight: pin a version label
+      (<code>ubuntu-24.04</code>) where reproducibility matters, and read the image release notes when a
+      <code>-latest</code> label moves.
+    </p>
+  </Callout>
+
+  <h3 id="yaml-anchors-and-aliases">YAML anchors and aliases</h3>
+  <p>
+    Since September 2025 workflows accept YAML <strong>anchors</strong> (<code>&amp;name</code>, which labels a value)
+    and <strong>aliases</strong> (<code>*name</code>, which repeats it) to reuse a mapping, a sequence or a whole step
+    <strong>within one file</strong>. Anchors do not cross files — reuse across files is what reusable workflows and
+    composite actions are for.
+  </p>
+  <CodeBlock file=".github/workflows/anchors.yml" excerpt code={anchors} />
+  <p>
+    The study guide also lists the YAML <strong>merge key</strong>, <code>&lt;&lt;</code>, which copies every key of an
+    aliased mapping into the current one and lets local keys override:
+  </p>
+  <CodeBlock lang="yaml" label="YAML merge key" code={mergeKey} />
+  <Callout type="exam" title="Merge keys: know how to read them">
+    <p>
+      GitHub's documentation describes only <code>&amp;</code> anchors and <code>*</code> aliases, and community reports
+      say <code>&lt;&lt;</code> is still rejected by Actions. The study guide expects you to <strong>expand</strong>
+      merged mappings when reading a configuration, so know the rule — the merged keys are copied in, and any key written
+      locally wins — but do not rely on <code>&lt;&lt;</code> in a real workflow. This is listed with the other
+      <a href={`${href('exam-tips')}#where-the-study-guide-and-the-docs-disagree`}>study-guide discrepancies</a>.
+    </p>
+  </Callout>
+
+  <h3 id="predefined-contexts">Predefined contexts</h3>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Context</th><th>Holds</th><th>Typical use</th></tr></thead>
+      <tbody>
+        <tr><td><code>github</code></td><td>The run and its event: <code>event_name</code>, <code>ref</code>, <code>ref_name</code>, <code>sha</code>, <code>actor</code>, <code>repository</code>, <code>run_id</code>, <code>run_number</code>, <code>run_attempt</code>, <code>workflow</code>, <code>token</code></td><td>Conditions on branch or event; <code>github.event</code> is the full webhook payload</td></tr>
+        <tr><td><code>env</code></td><td>Variables set with <code>env:</code></td><td>Reading a variable in an expression</td></tr>
+        <tr><td><code>vars</code></td><td>Configuration variables at organisation, repository and environment level</td><td>Non-secret settings, such as URLs and feature flags</td></tr>
+        <tr><td><code>secrets</code></td><td>Secrets available to the run, plus <code>GITHUB_TOKEN</code></td><td>Passing a secret into a step's <code>env</code> or <code>with</code></td></tr>
+        <tr><td><code>inputs</code></td><td>Inputs of <code>workflow_dispatch</code> or <code>workflow_call</code></td><td>Typed parameters</td></tr>
+        <tr><td><code>matrix</code> · <code>strategy</code></td><td>This leg's matrix values · <code>fail-fast</code>, <code>job-index</code>, <code>job-total</code>, <code>max-parallel</code></td><td>Per-variant configuration</td></tr>
+        <tr><td><code>needs</code></td><td><code>outputs</code> and <code>result</code> of the jobs this job needs</td><td>Passing data between jobs</td></tr>
+        <tr><td><code>job</code> · <code>steps</code></td><td>This job's <code>status</code>, <code>container</code> and <code>services</code> · earlier steps' <code>outputs</code>, <code>outcome</code>, <code>conclusion</code></td><td>Reacting to earlier steps</td></tr>
+        <tr><td><code>runner</code></td><td><code>os</code>, <code>arch</code>, <code>name</code>, <code>temp</code>, <code>tool_cache</code>, <code>environment</code> (<code>github-hosted</code> or <code>self-hosted</code>)</td><td>Cross-platform scripts, cache keys</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    <code>github.ref</code> is the full ref (<code>refs/heads/main</code>, <code>refs/tags/v1.2.0</code>,
+    <code>refs/pull/42/merge</code>); <code>github.ref_name</code> is the short name. In a <code>pull_request</code> run,
+    <code>github.head_ref</code> and <code>github.base_ref</code> hold the branch names, and <code>github.sha</code> is
+    the <strong>merge commit</strong>, not the head of the branch.
+  </p>
+  <Callout type="note" title="Contexts and version pinning">
+    <p>
+      The study guide pairs contexts with immutable actions and version pinning because an action reference is resolved
+      when the job starts: <code>@v7</code> means whatever commit the <code>v7</code> tag points to at that moment.
+      Expressions cannot be used in <code>uses:</code>, so a reference cannot be chosen dynamically. Pinning to a full
+      SHA, workflow lockfiles and what happened to immutable actions are covered on the
+      <a href={`${href('skill-5-secure-optimize')}#pin-actions-to-a-full-commit-sha`}>security page</a> and in
+      <a href={`${href('skill-3-author-actions')}#immutable-actions-and-what-shipped-instead`}>Skill 3</a>.
+    </p>
+  </Callout>
+
+  <h3 id="expressions">Expressions</h3>
+  <CodeBlock lang="yaml" label="step (excerpt)" code={expressions} />
+  <ul>
+    <li>Comparisons are loose: strings compare case-insensitively, and mismatched types are coerced to numbers (<code>'' == 0</code> and <code>null == 0</code> are true).</li>
+    <li>Falsy values are <code>false</code>, <code>0</code>, <code>-0</code>, <code>''</code> and <code>null</code>; everything else, including <code>'false'</code>, is truthy.</li>
+    <li><code>hashFiles()</code> returns one SHA-256 for every file matching the patterns, relative to <code>GITHUB_WORKSPACE</code> — empty if nothing matches.</li>
+    <li><code>fromJSON()</code> turns a JSON string — typically a job output — back into an object, array, number or boolean, which is how a matrix is built at runtime.</li>
+    <li>Expressions are not allowed in <code>on:</code> or in <code>uses:</code>.</li>
+  </ul>
+
+  <h3 id="static-and-runtime-evaluation">Static and runtime evaluation</h3>
+  <p>
+    Two things are easy to blur. <strong>When</strong> an expression is evaluated depends on its key: workflow-level keys
+    when the run is queued, job-level keys when the job is scheduled, step keys just before the step — which is why a
+    job's <code>if:</code> cannot see <code>steps</code> and <code>runs-on</code> cannot use <code>env</code>.
+    <strong>How</strong> it reaches a script matters too: a <code>{'${{ }}'}</code> inside <code>run:</code> is
+    <em>substituted into the script text before the shell starts</em>, while <code>$VAR</code> is read by the shell at
+    runtime. The first lets attacker-controlled text become code; the second keeps it data.
+  </p>
+  <CodeBlock file=".github/workflows/secrets.yml" excerpt code={leak} />
+  <ul>
+    <li>Secrets are <strong>masked</strong> in logs as <code>***</code> — but only their exact value. Anything derived from a secret (base64, a JSON field, a substring) is not masked unless you register it with <code>::add-mask::</code>.</li>
+    <li>Pass secrets through <code>env:</code> or <code>with:</code>, not on a command line, where they can show up in process lists.</li>
+    <li>Do not store structured data (JSON, YAML) as a single secret: masking works on exact strings.</li>
+    <li>The <code>secrets</code> context cannot be referenced directly in <code>if:</code>; map it to an <code>env</code> value first, as in the last step above.</li>
+  </ul>
+
+  <h3 id="editor-tooling">Editor tooling</h3>
+  <p>
+    The <strong>GitHub Actions extension for VS Code</strong> (<code>github.vscode-github-actions</code>) understands
+    workflow files: syntax highlighting, <strong>IntelliSense</strong> for keys, contexts and expressions,
+    <strong>action metadata</strong> completion (it reads the <code>inputs</code> of the action you <code>uses:</code>),
+    validation errors as you type, and a panel to browse workflows and runs, read logs, re-run jobs and trigger
+    <code>workflow_dispatch</code> runs without leaving the editor.
+  </p>
+  <ul>
+    <li><strong>YAML schema completion</strong>: any editor with a YAML language server picks up the SchemaStore schemas for workflows and <code>action.yml</code>, giving key completion and type checking.</li>
+    <li><strong>actionlint</strong> is an open-source linter that catches what schemas cannot: unknown contexts, type errors in expressions, invalid <code>needs</code>, shell issues and injection-prone <code>run:</code> lines. Run it locally and in CI.</li>
+    <li>The workflow editor on GitHub.com offers the same completion and a Marketplace side panel for searching actions.</li>
+  </ul>
+
+  <!-- ================================================================= -->
+  <h2 id="manage-execution-and-outputs">Manage workflow execution and outputs</h2>
+
+  <h3 id="caching-dependencies">Caching dependencies</h3>
+  <CodeBlock file=".github/workflows/cache.yml" excerpt code={cache} />
+  <ul>
+    <li>Lookup order: exact <code>key</code>, then each <code>restore-keys</code> prefix in order, newest match first. <code>cache-hit</code> is <code>'true'</code> only for an exact key match.</li>
+    <li>A cache is <strong>immutable</strong>: an existing key is never overwritten. Change the key (usually via <code>hashFiles</code>) to save a new one.</li>
+    <li>Scope: a run can restore caches from its <strong>own branch</strong> or the <strong>default branch</strong>; a pull request also from its <strong>base</strong> branch. Sibling branches never share.</li>
+    <li>Caches not accessed for <strong>7 days</strong> are evicted; the repository limit is <strong>10 GB</strong> by default (admins can raise it, billed beyond), oldest-accessed evicted first.</li>
+    <li>The <code>setup-*</code> actions have built-in caching (<code>cache: npm</code>, <code>pip</code>, <code>gradle</code>…), keyed on the lockfile.</li>
+  </ul>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th></th><th>Cache</th><th>Artifact</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Purpose</strong></td><td>Speed up a later run by reusing files that rarely change</td><td>Keep the output of a run — builds, reports, logs</td></tr>
+        <tr><td><strong>Across</strong></td><td>Runs (by key and branch scope)</td><td>Jobs in the same run, and download after the run</td></tr>
+        <tr><td><strong>Lifetime</strong></td><td>Evicted after 7 days unused, or for space</td><td>Retention days (default 90)</td></tr>
+        <tr><td><strong>Mutability</strong></td><td>Immutable per key</td><td>Immutable once uploaded (v4 and later)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="artifacts">Artifacts</h3>
+  <CodeBlock file=".github/workflows/build.yml" excerpt code={artifacts} />
+  <ul>
+    <li><code>upload-artifact@v7</code> and <code>download-artifact@v8</code> are the current majors. Since v4, artifacts are <strong>immutable</strong> and an artifact name must be unique in a run — upload once per name, or pass <code>overwrite: true</code>.</li>
+    <li>For a matrix, give each leg its own name (<code>{'coverage-${{ matrix.os }}'}</code>) and download with <code>pattern: coverage-*</code> and <code>merge-multiple: true</code>.</li>
+    <li>v7 can upload a single file <strong>unzipped</strong> with <code>archive: false</code>; v8 checks digests and fails on a mismatch by default.</li>
+    <li>Default retention is <strong>90 days</strong>. Public repositories allow 1–90 days; private and internal up to 400. <code>retention-days</code> can shorten, never exceed, the configured maximum.</li>
+  </ul>
+
+  <h3 id="retention-policies-via-the-rest-api">Retention policies via the REST API</h3>
+  <p>
+    The <strong>artifact and log retention</strong> setting covers artifacts, logs and workflow-run data. Set it in
+    <strong>Settings → Actions → General</strong>, or programmatically — at enterprise, organisation or repository level,
+    where each level can only be the same or shorter than the one above.
+  </p>
+  <CodeBlock lang="bash" label="gh api" code={retention} />
+  <p>
+    There is no separate "keep runs for N days" switch: runs age out with the retention period, and you can delete a run,
+    its logs or an artifact early through the API, the UI or <code>gh run delete</code>.
+  </p>
+
+  <h3 id="passing-data-between-jobs-and-steps">Passing data between jobs and steps</h3>
+  <Mermaid
+    code={dataFlow}
+    caption="A step writes key=value to $GITHUB_OUTPUT; the job maps it into jobs.<id>.outputs; later jobs read it through needs; a reusable workflow re-exports job outputs through on.workflow_call.outputs. Files travel as artifacts instead."
+  />
+  <CodeBlock file=".github/workflows/release.yml" excerpt code={outputs} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Mechanism</th><th>Scope</th><th>Use for</th></tr></thead>
+      <tbody>
+        <tr><td><code>$GITHUB_ENV</code></td><td>Later steps, same job</td><td>Environment variables computed at runtime</td></tr>
+        <tr><td><code>$GITHUB_OUTPUT</code> → <code>steps.&lt;id&gt;.outputs</code></td><td>Later steps, same job (the step needs an <code>id</code>)</td><td>Small strings between steps</td></tr>
+        <tr><td>Job <code>outputs</code> → <code>needs.&lt;job&gt;.outputs</code></td><td>Jobs that <code>need</code> it</td><td>Small strings across jobs (1 MB per job, 50 MB per run)</td></tr>
+        <tr><td><code>on.workflow_call.outputs</code></td><td>The caller of a reusable workflow</td><td>Returning values from a called workflow</td></tr>
+        <tr><td>Artifacts</td><td>Any job in the run, and afterwards</td><td>Files and directories</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <Callout type="warn" title="Outputs containing secrets are dropped">
+    <p>
+      A job output whose value contains a secret is not passed on — the runner redacts it and logs a warning. Pass a
+      reference (an artifact name, a key) instead, or let the downstream job fetch the secret itself.
+    </p>
+  </Callout>
+
+  <h3 id="job-summaries">Job summaries</h3>
+  <p>
+    Markdown appended to <code>$GITHUB_STEP_SUMMARY</code> is rendered on the run's summary page, under the job — tables,
+    links, emoji, collapsed sections and all. Each step has its own file, limited to <strong>1 MiB</strong>, and up to 20
+    step summaries are shown per job. Secrets are masked there too.
+  </p>
+  <CodeBlock lang="yaml" label="step" code={summary} />
+
+  <h3 id="status-badges">Status badges</h3>
+  <p>
+    A badge shows the status of the latest run of a workflow, by default for the default branch. Copy it from the
+    workflow's <strong>⋯ → Create status badge</strong> menu, or build the URL from the workflow <strong>file
+    name</strong>; <code>branch</code> and <code>event</code> query parameters narrow it.
+  </p>
+  <CodeBlock lang="markdown" label="README.md" code={badge} />
+
+  <h3 id="environment-protections">Environment protections</h3>
+  <p>
+    An <strong>environment</strong> is a deployment target with its own secrets, variables and protection rules. A job
+    that names it waits at the start until every rule passes, then gets the environment's secrets.
+  </p>
+  <CodeBlock file=".github/workflows/deploy.yml" excerpt code={envJob} />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Rule</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Required reviewers</strong></td><td>Up to six people or teams; one approval releases the job. <strong>Prevent self-review</strong> stops the person who triggered the run approving it.</td></tr>
+        <tr><td><strong>Wait timer</strong></td><td>Delay the job by 1 to 43,200 minutes (30 days)</td></tr>
+        <tr><td><strong>Deployment branches and tags</strong></td><td>All branches, protected branches only, or selected name patterns</td></tr>
+        <tr><td><strong>Custom deployment protection rules</strong></td><td>A GitHub App approves or rejects, e.g. after a change-ticket or monitoring check</td></tr>
+        <tr><td><strong>Allow administrators to bypass</strong></td><td>On by default; turn off to bind admins to the rules too</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul>
+    <li>Referencing an environment that does not exist <strong>creates it</strong>, with no protection rules.</li>
+    <li>A job waits at most <strong>30 days</strong> for approval before it fails.</li>
+    <li>Since December 2025, branch rules match the <strong>executing ref</strong> for pull request events: <code>refs/pull/&lt;n&gt;/merge</code> for <code>pull_request</code>, the default branch for <code>pull_request_target</code>.</li>
+    <li>Plans: environments, their secrets and branch rules are available for public repositories on every plan, and for private ones on Pro, Team and Enterprise; required reviewers and wait timers in private repositories need Enterprise.</li>
+  </ul>
+</NoteLayout>

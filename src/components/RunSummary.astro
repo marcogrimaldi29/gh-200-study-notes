@@ -1,0 +1,40 @@
+---
+import Octicon from './Octicon.astro';
+
+/**
+ * The bordered row of labelled cells at the top of an Actions run summary:
+ * small muted labels over monospace values. Each note page opens with one
+ * (skill, weighting, skills-measured revision, sections), and the home page's
+ * "Exam at a glance" uses the same cells, so the two read as one component.
+ *
+ * It takes no colour beyond the page accent on the first cell's Octicon, and
+ * wraps to two columns on phones.
+ */
+export interface Cell {
+  label: string;
+  value: string | number;
+  /** Octicon before the value, drawn in the page accent. */
+  icon?: string;
+}
+
+interface Props {
+  cells: Cell[];
+  class?: string;
+}
+
+const { cells, class: className } = Astro.props;
+---
+
+<dl class:list={['run-summary', `rs-${cells.length}`, className]}>
+  {
+    cells.map((c) => (
+      <div class="rs-cell">
+        <dt class="rs-label">{c.label}</dt>
+        <dd class="rs-value">
+          {c.icon && <Octicon name={c.icon} class="rs-icon" />}
+          <span>{c.value}</span>
+        </dd>
+      </div>
+    ))
+  }
+</dl>

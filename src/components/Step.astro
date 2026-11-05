@@ -1,0 +1,26 @@
+---
+import Octicon from './Octicon.astro';
+import StatusIcon from './StatusIcon.astro';
+
+/** One step row inside <JobSteps>: success icon, step name, detail folded beneath. */
+interface Props {
+  name: string;
+  /** Start unfolded. */
+  open?: boolean;
+}
+
+const { name, open = false } = Astro.props;
+---
+
+<li class="js-step">
+  <details open={open || undefined}>
+    <summary>
+      <Octicon name="chevron-right" size={12} class="js-chevron" />
+      <StatusIcon status="success" />
+      <span class="js-name">{name}</span>
+    </summary>
+    <div class="js-body">
+      <slot />
+    </div>
+  </details>
+</li>

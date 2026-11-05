@@ -1,0 +1,27 @@
+# Build output
+dist/
+.astro/
+
+# Dependencies
+node_modules/
+
+# Claude Code local config (launch.json, settings.local.json, etc.)
+.claude/
+
+# Environment
+.env
+.env.production
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Personal brief for this build — kept local, not part of the published notes
+gh-200-study-guide-instructions.md
+instructions.md
+
+# Original, full-size source images. The web copies the site uses live in
+# public/images/ (the avatar resized for a 56px slot).
+/assets/

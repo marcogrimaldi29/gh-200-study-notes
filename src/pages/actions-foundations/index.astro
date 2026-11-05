@@ -1,0 +1,271 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import StatusIcon from '../../components/StatusIcon.astro';
+import { SITE } from '../../data/site';
+import { href } from '../../lib/urls';
+
+const hierarchy = `
+flowchart LR
+  EV["Event"] --> WF["Workflow run"]
+  WF --> J1["Job A"]
+  WF --> J2["Job B"]
+  J1 --> R1["Runner<br/>fresh VM or container"]
+  J2 --> R2["Runner<br/>fresh VM or container"]
+  R1 --> S1["Steps<br/>run: scripts · uses: actions"]
+  R2 --> S2["Steps<br/>run: scripts · uses: actions"]
+`;
+
+const lifecycle = `
+flowchart LR
+  A["Event fires<br/>workflow file read<br/>from its commit"] --> B["Run queued<br/>repo and org<br/>secrets read"]
+  B --> C["Job starts<br/>environment rules,<br/>environment secrets,<br/>GITHUB_TOKEN minted"]
+  C --> D["Job ends<br/>token revoked"]
+`;
+
+const anatomy = `name: CI                                  # shown in the Actions tab
+run-name: CI for \${{ github.ref_name }} by @\${{ github.actor }}
+
+on:                                       # 1 · the events that start a run
+  push:
+    branches: [main]
+  pull_request:
+    paths: ['src/**', 'package*.json']
+  workflow_dispatch:                      # adds a "Run workflow" button
+
+permissions:                              # 2 · the GITHUB_TOKEN's scopes
+  contents: read
+
+concurrency:                              # 3 · one run per branch at a time
+  group: ci-\${{ github.ref }}
+  cancel-in-progress: true
+
+env:                                      # 4 · variables for every job
+  NODE_ENV: test
+
+jobs:
+  test:                                   # 5 · a job: one runner, many steps
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7         # an action
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci                       # a script, in the default shell
+      - run: npm test
+
+  build:
+    needs: test                           # 6 · waits for test to succeed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm ci && npm run build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/`;
+
+const firstLog = `::group::Run actions/checkout@v7
+with:
+  repository: octo-org/web
+  token: ***
+  persist-credentials: true
+::endgroup::
+Syncing repository: octo-org/web
+::group::Getting Git version info
+Working directory is '/home/runner/work/web/web'
+/usr/bin/git version
+git version 2.51.0
+::endgroup::
+Fetching the repository
+Determining the checkout info
+::notice::Checked out 1f2e3d4 (refs/heads/main)`;
+---
+
+<NoteLayout
+  slug="actions-foundations"
+  description="GH-200 foundations: events, workflows, jobs, steps, runners and actions, where every file lives, what a run looks like in the Actions tab, when each part is evaluated, and the renames and retired syntax you will meet."
+  intro="The vocabulary and the run model every other page builds on: what starts a run, what a job and a step are, where each file lives, what the Actions tab shows you, when each piece is evaluated — and which names and commands older material still uses."
+>
+  <h2 id="what-github-actions-is">What GitHub Actions is</h2>
+  <p>
+    <strong>GitHub Actions</strong> is GitHub's built-in automation platform. You describe automation as
+    <strong>YAML workflow files</strong> committed to the repository, and GitHub runs them on
+    <strong>runners</strong> in response to <strong>events</strong> — a push, a pull request, a schedule, a button
+    press, an API call or almost any activity on GitHub. CI/CD is the obvious use, but the same machinery labels issues,
+    publishes packages, rotates dependencies, deploys Pages sites and answers webhooks from other systems.
+  </p>
+  <p>
+    Because workflows live in the repository, they are versioned, reviewed and branched like code. That is the root of
+    many exam answers: a workflow change goes through a pull request, a workflow on a branch runs <em>that branch's</em>
+    version of the file, and protecting <code>.github/workflows/</code> with CODEOWNERS is how you control who may change
+    automation.
+  </p>
+
+  <h2 id="the-building-blocks">The building blocks</h2>
+  <Mermaid
+    code={hierarchy}
+    caption="An event starts a workflow run. Each job gets its own fresh runner, so jobs share nothing unless you pass it explicitly — artifacts, outputs or a cache. Steps within a job share the runner's filesystem and environment."
+  />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Term</th><th>What it is</th><th>Remember</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Event</strong></td><td>Activity that triggers a run: <code>push</code>, <code>pull_request</code>, <code>schedule</code>, <code>workflow_dispatch</code>, <code>repository_dispatch</code>, <code>workflow_call</code>, <code>issues</code>…</td><td>Declared under <code>on:</code>; many events have <code>types</code> and filters</td></tr>
+        <tr><td><strong>Workflow</strong></td><td>A YAML file in <code>.github/workflows/</code> with one or more jobs</td><td>Only <code>.yml</code> or <code>.yaml</code> files in that exact directory run</td></tr>
+        <tr><td><strong>Workflow run</strong></td><td>One execution of a workflow, with a run ID, run number and attempt number</td><td>Re-running increments <code>github.run_attempt</code>, not <code>run_number</code></td></tr>
+        <tr><td><strong>Job</strong></td><td>A set of steps that runs on one runner</td><td>Jobs run <strong>in parallel</strong> by default; <code>needs:</code> makes them sequential</td></tr>
+        <tr><td><strong>Step</strong></td><td>One <code>run:</code> script or one <code>uses:</code> action</td><td>Steps run <strong>in order</strong>; a failing step fails the job unless <code>continue-on-error</code></td></tr>
+        <tr><td><strong>Action</strong></td><td>A reusable unit of steps: JavaScript, Docker container or composite</td><td>Referenced as <code>owner/repo@ref</code>, <code>./path</code> or <code>docker://image</code></td></tr>
+        <tr><td><strong>Runner</strong></td><td>The machine that executes a job — GitHub-hosted, larger, or self-hosted</td><td>Selected by <code>runs-on</code> labels, groups or both</td></tr>
+        <tr><td><strong>Reusable workflow</strong></td><td>A workflow with <code>on: workflow_call</code>, called as a <em>job</em> with <code>jobs.&lt;id&gt;.uses</code></td><td>Called at job level; a composite action is used at step level</td></tr>
+        <tr><td><strong>Environment</strong></td><td>A named deployment target with protection rules, secrets and variables</td><td>A job opts in with <code>environment:</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="anatomy-of-a-workflow">Anatomy of a workflow</h2>
+  <p>
+    Every workflow you meet on the exam is some arrangement of the same few top-level keys. Learn to read them in this
+    order: <strong>when</strong> does it run (<code>on</code>), with <strong>what power</strong>
+    (<code>permissions</code>), <strong>how many at once</strong> (<code>concurrency</code>), and then the
+    <strong>jobs</strong> and their dependencies.
+  </p>
+  <CodeBlock file=".github/workflows/ci.yml" code={anatomy} />
+  <p>
+    The highlighted <code>{'${{ … }}'}</code> spans are <strong>expressions</strong>: GitHub evaluates them before the
+    text reaches the runner. Everything else in a <code>run:</code> line is handed to the shell as-is. Keeping that
+    boundary in mind is half of the security skill — an expression that injects untrusted text into a script is the
+    classic script-injection bug.
+  </p>
+  <Callout type="code-note" title="Two styles of pinning in these notes">
+    <p>
+      First-party <code>actions/*</code> samples use major tags such as <code>actions/checkout@v7</code> for readability.
+      Third-party actions are pinned to a full commit SHA with the version in a trailing comment, as the
+      <a href={`${href('skill-5-secure-optimize')}#pin-actions-to-a-full-commit-sha`}>security page</a> recommends.
+    </p>
+  </Callout>
+
+  <h2 id="where-files-live">Where files live</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Path</th><th>What it holds</th></tr></thead>
+      <tbody>
+        <tr><td><code>.github/workflows/*.yml</code></td><td>Workflows, including reusable ones (<code>on: workflow_call</code>). Subdirectories are <strong>not</strong> scanned.</td></tr>
+        <tr><td><code>.github/workflows/actions.lock</code></td><td>The workflow lockfile that records the exact commit of every action a workflow uses (generally available since 28 October 2026)</td></tr>
+        <tr><td><code>action.yml</code> / <code>action.yaml</code></td><td>Action metadata. At the repository root for a published action; Marketplace listing requires it there.</td></tr>
+        <tr><td><code>.github/actions/&lt;name&gt;/action.yml</code></td><td>A conventional home for a local action, used with <code>uses: ./.github/actions/&lt;name&gt;</code> after checkout</td></tr>
+        <tr><td><code>.github</code> repository → <code>workflow-templates/</code></td><td>Organisation workflow templates: a <code>.yml</code> plus a matching <code>.properties.json</code> (and an optional icon)</td></tr>
+        <tr><td><code>.github/dependabot.yml</code></td><td>Dependabot version updates, including <code>package-ecosystem: github-actions</code> to keep action versions current</td></tr>
+        <tr><td><code>.github/CODEOWNERS</code></td><td>Code owners — commonly used to require review for <code>/.github/workflows/</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="when-each-part-is-evaluated">When each part is evaluated</h2>
+  <p>
+    Many questions reduce to timing. A workflow is not one script run top to bottom: different parts are read at
+    different moments, by different components, and some contexts simply do not exist yet when a key is evaluated.
+  </p>
+  <Mermaid
+    code={lifecycle}
+    caption="The life of a run. The workflow file comes from the commit the event points at — the default branch for schedule, workflow_dispatch defaults and pull_request_target. Repository and organisation secrets are read when the run is queued; environment secrets when a job that references the environment starts."
+  />
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Moment</th><th>What happens</th><th>Consequence</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Parse time</strong></td><td>YAML parsed, anchors expanded, <code>on:</code> filters checked</td><td>Invalid YAML fails the run before any job starts, with an annotation on the run page</td></tr>
+        <tr><td><strong>Run queued</strong></td><td><code>run-name</code>, workflow-level <code>concurrency</code>, repo and org secrets</td><td><code>run-name</code> can use <code>github</code> and <code>inputs</code>, not <code>env</code></td></tr>
+        <tr><td><strong>Job scheduled</strong></td><td><code>jobs.&lt;id&gt;.if</code>, <code>strategy</code>, <code>runs-on</code>, job <code>concurrency</code></td><td>These can read <code>needs</code>, <code>vars</code>, <code>inputs</code>, <code>matrix</code> — but not <code>env</code> or <code>steps</code></td></tr>
+        <tr><td><strong>Job starts</strong></td><td>Environment rules, environment secrets, <code>GITHUB_TOKEN</code> minted, services started</td><td>A failed protection rule stops the job before any step runs</td></tr>
+        <tr><td><strong>Each step</strong></td><td><code>steps[*].if</code>, <code>with</code>, <code>env</code>, then the step runs</td><td>Only here can you read <code>steps.&lt;id&gt;.outputs</code> and values written to <code>$GITHUB_ENV</code> earlier</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The <a href={`${href('syntax-reference')}#context-availability`}>Syntax reference</a> has the full table of which
+    contexts each key can see.
+  </p>
+
+  <h2 id="the-actions-tab">The Actions tab</h2>
+  <p>
+    The exam expects you to know where things are in the UI, not just in YAML. The <strong>Actions</strong> tab of a
+    repository lists workflows on the left and their runs on the right, filterable by event, status, branch and actor.
+    Opening a run shows its <strong>summary</strong>: the trigger, status, duration, a graph of jobs, annotations,
+    job summaries and artifacts. Opening a job shows its <strong>steps</strong> and their logs.
+  </p>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Status</th><th>What it means</th></tr></thead>
+      <tbody>
+        <tr><td><StatusIcon status="success" label="" /> <strong>Success</strong></td><td>Every job finished without a failure (a job that was skipped does not fail the run)</td></tr>
+        <tr><td><StatusIcon status="failure" label="" /> <strong>Failure</strong></td><td>A step exited non-zero and nothing caught it; downstream <code>needs:</code> jobs are skipped</td></tr>
+        <tr><td><StatusIcon status="skipped" label="" /> <strong>Skipped</strong></td><td>A job's <code>if:</code> was false, or a job it needs did not succeed</td></tr>
+        <tr><td><StatusIcon status="cancelled" label="" /> <strong>Cancelled</strong></td><td>Cancelled by a person, the API, <code>concurrency</code> with <code>cancel-in-progress</code>, or a timeout</td></tr>
+        <tr><td><StatusIcon status="in-progress" label="" /> <strong>In progress</strong></td><td>Running — or queued, waiting for a runner, a concurrency slot or an environment approval</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>A job's log is grouped by step. Here is the start of a checkout step as the log viewer shows it:</p>
+  <CodeBlock lang="log" title="Run actions/checkout@v7" status="success" code={firstLog} />
+  <p>
+    Each step's output is folded into groups, secrets are replaced by <code>***</code>, and annotations such as
+    <code>::notice::</code> are lifted into the run summary. <a href={href('skill-2-consume-troubleshoot')}>Skill 2</a>
+    covers reading logs, re-running and downloading them in depth.
+  </p>
+
+  <h2 id="runners-in-brief">Runners in brief</h2>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>Runner</th><th>Who manages it</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><strong>GitHub-hosted (standard)</strong></td><td>GitHub</td><td>A fresh VM per job; Ubuntu, Windows and macOS; free for public repositories</td></tr>
+        <tr><td><strong>Larger runners</strong></td><td>GitHub</td><td>More CPU and memory, GPU, Arm, static IP ranges, Azure private networking, custom images; Team and Enterprise Cloud</td></tr>
+        <tr><td><strong>Self-hosted</strong></td><td>You</td><td>Your own machine or container running the runner application; persistent unless ephemeral</td></tr>
+        <tr><td><strong>Actions Runner Controller</strong></td><td>You, on Kubernetes</td><td>Autoscaling ephemeral self-hosted runners as runner scale sets</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The current GitHub-hosted labels, checked on {SITE.checked}: <code>ubuntu-latest</code> is moving from Ubuntu
+    24.04 to <strong>Ubuntu 26.04</strong> in a gradual rollout between 19 October and 19 November 2026;
+    <code>windows-latest</code> is <strong>Windows Server 2025</strong>; <code>macos-latest</code> is
+    <strong>macOS 26 on Arm64</strong>. <a href={`${href('skill-4-enterprise')}#github-hosted-runners`}>Skill 4</a>
+    covers runner management in full.
+  </p>
+
+  <h2 id="renames-and-retired-syntax">Renames and retired syntax</h2>
+  <p>
+    Older Learn units, blog posts, forum answers and practice questions are full of names and commands that have moved.
+    The exam follows the current product, but you will read both.
+  </p>
+  <div class="table-wrap">
+    <table class="tbl">
+      <thead><tr><th>You may read</th><th>Current name or syntax</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Starter workflows</td><td><strong>Workflow templates</strong></td><td>The study guide still says "starter workflows"; the docs and the UI say workflow templates</td></tr>
+        <tr><td><code>echo "::set-output name=x::y"</code></td><td><code>echo "x=y" &gt;&gt; "$GITHUB_OUTPUT"</code></td><td>Retired; the runner now ignores the command</td></tr>
+        <tr><td><code>::save-state</code></td><td><code>echo "x=y" &gt;&gt; "$GITHUB_STATE"</code></td><td>Retired alongside <code>set-output</code></td></tr>
+        <tr><td><code>::set-env</code>, <code>::add-path</code></td><td><code>$GITHUB_ENV</code>, <code>$GITHUB_PATH</code></td><td>Disabled since 2020 for security</td></tr>
+        <tr><td><code>actions/upload-artifact@v3</code></td><td><code>actions/upload-artifact@v7</code>, <code>download-artifact@v8</code></td><td>v3 stopped working in January 2025; v4+ artifacts are immutable and need matching majors</td></tr>
+        <tr><td><code>runs.using: node16</code> / <code>node20</code></td><td><code>runs.using: node24</code></td><td>Node 24 became the default on 16 June 2026; Node 20 was removed on 23 September 2026, so older declarations now run on Node 24</td></tr>
+        <tr><td><code>ubuntu-20.04</code>, <code>windows-2019</code>, <code>macos-13</code></td><td><code>ubuntu-24.04</code> / <code>26.04</code>, <code>windows-2025</code>, <code>macos-15</code> / <code>26</code></td><td>Retired images fail to find a runner</td></tr>
+        <tr><td>"Required workflows" (organisation setting)</td><td>Rulesets → <strong>Require workflows to pass before merging</strong></td><td>Required workflows moved into repository rulesets</td></tr>
+        <tr><td>Immutable actions (OCI packages on ghcr.io)</td><td><strong>Immutable releases</strong> and <strong>workflow lockfiles</strong></td><td>Removed from GitHub's roadmap in December 2025; see <a href={`${href('skill-3-author-actions')}#immutable-actions-and-what-shipped-instead`}>Skill 3</a></td></tr>
+        <tr><td><code>pull_request_target</code> running the base branch's workflow</td><td>Always the <strong>default branch's</strong> workflow</td><td>Changed on 8 December 2025, along with how environment branch rules match PR events</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <Callout type="retired" title="Retired commands still look plausible">
+    <p>
+      An answer option that uses <code>::set-output</code> is wrong even though it looks like valid workflow-command
+      syntax. If a question shows it in a log or script, the right reading is "this output will be empty". The same goes
+      for <code>actions/upload-artifact@v3</code>, which fails today, and for <code>node16</code> or <code>node20</code> actions, which the runner now runs on Node 24 whatever they declare — untested, and liable to break.
+    </p>
+  </Callout>
+</NoteLayout>
