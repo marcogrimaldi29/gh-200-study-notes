@@ -43,7 +43,9 @@ verify anything decision-critical against the [official documentation](https://d
 ## 🐞 Spotted a Mistake?
 
 GitHub Actions ships changes every few weeks — new runner images, new action majors, new limits — so if something here
-is wrong or out of date, please [report an issue](https://github.com/marcogrimaldi29/gh-200-study-notes/issues).
+is wrong or out of date, please [report an issue](https://github.com/marcogrimaldi29/gh-200-study-notes/issues). The
+[contributing guide](.github/CONTRIBUTING.md) covers what to check first, what makes a report quick to fix and what's
+out of scope.
 
 ## ⚠️ Disclaimer
 
