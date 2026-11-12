@@ -63,3 +63,6 @@ instead, starting it with **"Security: GH-200 Study Notes"** so it stands out.
 I maintain this repo on my own, so responses are best effort. I'll confirm I've received your report, keep you updated
 in the private report while I look into it, and tell you when it's fixed. If you'd like to be credited, say so and I'll
 credit you in the security advisory or the fix.
+
+Dependabot is turned on for this repo, so known vulnerabilities in its dependencies are usually flagged without anyone
+needing to report them.
